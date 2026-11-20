@@ -1,0 +1,21 @@
+test_mismatched_artifacts (test_service.ArtifactTests.test_mismatched_artifacts) ... ok
+test_resource_thresholds (test_service.ArtifactTests.test_resource_thresholds) ... ok
+test_bad_readings (test_service.ServiceTests.test_bad_readings) ... ok
+test_boundaries_and_out_of_distribution (test_service.ServiceTests.test_boundaries_and_out_of_distribution) ... ok
+test_health (test_service.ServiceTests.test_health) ... ok
+test_held_out_single_http_accuracy (test_service.ServiceTests.test_held_out_single_http_accuracy) ... HTTP validation MAE 3.978430 days on 395 labeled readings
+ok
+test_independent_numpy_forward (test_service.ServiceTests.test_independent_numpy_forward) ... ok
+test_interactive_docs (test_service.ServiceTests.test_interactive_docs) ... ok
+test_invalid_batches (test_service.ServiceTests.test_invalid_batches) ... ok
+test_largest_supported_batch (test_service.ServiceTests.test_largest_supported_batch) ... ok
+test_malformed_and_nonfinite (test_service.ServiceTests.test_malformed_and_nonfinite) ... ok
+test_missing_extra_wrong_shapes (test_service.ServiceTests.test_missing_extra_wrong_shapes) ... ok
+test_model_info_from_weight_shapes (test_service.ServiceTests.test_model_info_from_weight_shapes) ... ok
+test_order_and_batch_sizes (test_service.ServiceTests.test_order_and_batch_sizes) ... ok
+test_repeat_and_restart (test_service.ServiceTests.test_repeat_and_restart) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 3.317s
+
+OK
