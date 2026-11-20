@@ -1,0 +1,15 @@
+1605 rows, 0 glitch rows dropped
+baseline (predict the mean): 44.27 days
+  epoch    0  val MAE 45.98 days
+  epoch  300  val MAE 24.75 days
+  epoch  600  val MAE 18.71 days
+  epoch  900  val MAE 15.66 days
+  epoch 1200  val MAE 17.33 days
+  epoch 1499  val MAE 23.29 days
+network (32, 32):            23.29 days
+saved model/model.pt and model/config.json
+
+Original code on raw rows excluding the final holdout.
+5-32-32-1, 1281 params, 1284 train / 321 validation.
+Train MAE 21.814469, validation MAE 23.294504, gap 1.480035 days.
+Elapsed 5.823 seconds including interpreter startup and export.

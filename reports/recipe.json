@@ -1,0 +1,12 @@
+{
+  "hidden": [
+    32,
+    32
+  ],
+  "lr": 0.003,
+  "epochs": 320,
+  "seed": 41,
+  "loss": "huber",
+  "decay": 1e-05,
+  "normalize": true
+}
