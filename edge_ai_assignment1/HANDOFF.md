@@ -15,11 +15,12 @@ From the repository root, use Python 3.11. In a new local checkout, run the foll
 ```sh
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -r edge_ai_assignment1/requirements.txt
+cd edge_ai_assignment1
 python -m unittest discover -s tests -v
 ```
 
-In the supplied Codespace, the devcontainer installs dependencies. Run the last command directly. To narrow a failure, add a name filter, for example `python -m unittest discover -s tests -v -k batch`. The suite starts and stops its own servers and loads the committed model. To explore the API locally, run `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` and open [local Swagger docs](http://127.0.0.1:8000/docs).
+In the supplied Codespace, the root devcontainer installs dependencies. Run `cd edge_ai_assignment1` and then run `python -m unittest discover -s tests -v` directly. To narrow a failure, add a name filter, for example `python -m unittest discover -s tests -v -k batch`. The suite starts and stops its own servers and loads the committed model. To explore the API locally, run `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` from `edge_ai_assignment1/` and open [local Swagger docs](http://127.0.0.1:8000/docs).
 
 ## Smoke-test the public deployment
 
@@ -60,7 +61,7 @@ For a public latency sample, run `python client/bench.py --url "$BATTERY_API_URL
 
 ## Restore service before grading
 
-1. Open the deployed Codespace and check `curl -fsS http://localhost:8000/health`. If the server is down, start it from the repository root with `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`. Leave that process running.
+1. Open the deployed Codespace, `cd edge_ai_assignment1`, and check `curl -fsS http://localhost:8000/health`. If the server is down, start it from `edge_ai_assignment1/` with `python -m uvicorn app.main:app --host 0.0.0.0 --port 8000`. Leave that process running.
 2. In **Ports**, set port **8000 → Port Visibility → Public** and copy its forwarded HTTPS address. If local health succeeds but the public test redirects to sign-in, recheck visibility and the copied URL.
 3. Run the external smoke test again. Give the instructor the verified **base URL** and the repository link. The Codespace owner should check the idle timeout and confirm reachability again when the grading window opens. [Team repository](https://github.com/mins-code/edge_ai_assignment1)
 

@@ -39,12 +39,13 @@ number. Use only your own team's file: every team's data, and the right answer, 
    (on a Mac press Cmd+Shift+. in Finder to see it). Add the other three as collaborators.
 2. On your repository: **Code → Codespaces → Create codespace on main**. The first start
    installs PyTorch and takes a few minutes. If nothing installs by itself, run
-   `pip install -r requirements.txt` in the terminal.
-3. Check that `data/team_NN_train.csv` (your number) is there.
-4. In the Codespace terminal, from the top folder:
+   `python -m pip install -r edge_ai_assignment1/requirements.txt` from the repository root.
+3. Check that `edge_ai_assignment1/data/team_NN_train.csv` (your number) is there.
+4. In the Codespace terminal, from the repository root, change into `edge_ai_assignment1`:
    ```
+   cd edge_ai_assignment1
    python train.py --team NN
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
+   python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
    The starter runs before you fill in any TODO. Its error will just be large.
 5. **Ports** tab → right-click **8000** → **Port Visibility → Public**. Copy the address
