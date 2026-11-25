@@ -59,11 +59,22 @@ def _validate_stream_integrity(got_feat: np.ndarray, fsamp: np.ndarray,
       9. Invalid sample offsets (s0 != fn * HOP)
      10. Invalid sample offset range
     """
-    bad_crc = brd.get("bad_crc", 0)
-    bcb = r.get("bad_crc_back", 0)
-    uart_err = brd.get("uart_errors", 0)
+    # 1: Required board & return-path metadata (reject missing keys instead of defaulting to 0)
+    required_brd_keys = {"bad_crc", "seq_gaps", "uart_errors", "samples", "frames_ok"}
+    missing_brd = required_brd_keys - set(brd.keys())
+    if missing_brd:
+        raise ValueError(f"Integrity: missing required board metadata keys: {missing_brd}")
+    required_r_keys = {"bad_crc_back", "expected_features"}
+    missing_r = required_r_keys - set(r.keys())
+    if missing_r:
+        raise ValueError(f"Integrity: missing required return-path metadata keys: {missing_r}")
 
-    # 1-3: Reject any corruption
+    bad_crc = brd["bad_crc"]
+    bcb = r["bad_crc_back"]
+    uart_err = brd["uart_errors"]
+    dup = brd.get("dup", 0)
+
+    # 2-4: Reject any corruption or unexpected duplicate packets
     if bad_crc > 0:
         raise RuntimeError(
             f"Integrity: bad_crc={bad_crc} — stream contains forward-path CRC errors")
@@ -73,16 +84,9 @@ def _validate_stream_integrity(got_feat: np.ndarray, fsamp: np.ndarray,
     if uart_err > 0:
         raise RuntimeError(
             f"Integrity: uart_errors={uart_err} — UART framing/overflow errors detected")
-
-    # 4: Required board metadata
-    required_brd_keys = {"bad_crc", "samples"}
-    missing_brd = required_brd_keys - set(brd.keys())
-    if missing_brd:
-        raise ValueError(f"Integrity: missing required board metadata keys: {missing_brd}")
-    required_r_keys = {"bad_crc_back", "expected_features"}
-    missing_r = required_r_keys - set(r.keys())
-    if missing_r:
-        raise ValueError(f"Integrity: missing required return-path metadata keys: {missing_r}")
+    if dup > 0:
+        raise RuntimeError(
+            f"Integrity: dup={dup} — unexpected duplicate packets detected")
 
     # 5: Length consistency
     if len(got_feat) != len(fsamp) or len(got_feat) != len(fnums):
@@ -149,7 +153,7 @@ def build_loss_aware_dataset(got_feat: np.ndarray, fsamp: np.ndarray, fnums: np.
     packets_expected = (expected_samples + SPP - 1) // SPP
 
     if skip_tuple is None:
-        # Clean stream: reject any unexplained loss
+        # Clean stream: reject any unexplained loss or packet/EOS mismatch
         if recv_samples != expected_samples:
             raise RuntimeError(
                 f"Fail-closed: sample count mismatch "
@@ -161,6 +165,14 @@ def build_loss_aware_dataset(got_feat: np.ndarray, fsamp: np.ndarray, fnums: np.
         if seq_gaps != 0:
             raise RuntimeError(
                 f"Fail-closed: seq_gaps={seq_gaps} in clean stream")
+        packets_sent = r.get("packets_sent", None)
+        if packets_sent is not None and packets_sent != packets_expected:
+            raise RuntimeError(
+                f"Fail-closed: expected {packets_expected} packets sent, got {packets_sent}")
+        if brd["frames_ok"] != packets_expected + 1:
+            raise RuntimeError(
+                f"Fail-closed: expected frames_ok={packets_expected + 1} "
+                f"(data + EOS), got {brd['frames_ok']}")
         # Clean: identity mapping
         orig_map = np.arange(expected_samples, dtype=np.int64)
     else:
@@ -221,6 +233,10 @@ def build_loss_aware_dataset(got_feat: np.ndarray, fsamp: np.ndarray, fnums: np.
             raise RuntimeError(
                 f"Controlled-skip: expected {expected_packets_sent} packets sent, "
                 f"got {packets_sent}")
+        if brd["frames_ok"] != expected_packets_sent + 1:
+            raise RuntimeError(
+                f"Controlled-skip: expected frames_ok={expected_packets_sent + 1} "
+                f"(accepted data + EOS), got {brd['frames_ok']}")
 
         # (8) Reconstruct the original timeline AFTER validation
         orig_map = np.concatenate([

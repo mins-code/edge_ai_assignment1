@@ -131,14 +131,12 @@ def validate_dataset_alignment(board_npz, numpy_npz):
                 raise ValueError(
                     f"Clip {ci}, frame {fi}: first_sample={fs_val} != "
                     f"frame_number={fn_val} * HOP={HOP}")
-            # first_sample should fall within the clip's range
-            expected_clip_start = int(clip_ids[ci]) * FS
-            expected_clip_end = expected_clip_start + FS - 1
-            if fs_val < expected_clip_start or fs_val > expected_clip_end:
-                # This is for within-clip frames; offsets should be within clip range
-                # Actually, clip_ids are indices into the clip list not sequential in sample space
-                # The sample offset = clip_index_in_stream * FS + frame_in_clip * HOP
-                pass  # clip ordering may not be sequential by ID
+            # Exact sample-offset validation: clip index ci * FS + frame index fi * HOP
+            expected_fs = ci * FS + fi * HOP
+            if fs_val != expected_fs:
+                raise ValueError(
+                    f"Clip {ci}, frame {fi}: first_sample={fs_val} != "
+                    f"expected {expected_fs} (ci*FS + fi*HOP)")
     
     # Verify feature shapes and finite values
     if not np.isfinite(X_board).all():

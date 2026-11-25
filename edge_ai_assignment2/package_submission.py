@@ -194,7 +194,8 @@ Hardware: ESP32-S3-DevKitC-1 N16R8 (240 MHz, 16 MB Flash, 8 MB PSRAM)
     m3_perf = _format_table(
         ["Implementation", "Stream", "Recv/Exp Feat", "Median us", "p95 us", "Max Err (dB)"],
         [
-            ["Starter O(N^2) DFT", "2s COM5", "7 / 99 (92 lost)", "1,855,700", "1,868,660", "0.00088"],
+            ["Starter O(N^2) DFT", "10s COM5 (timeout)", "16 / 499 (483 lost)", "1,855,698", "1,869,197", "0.00168"],
+            ["Starter O(N^2) DFT", "10s COM10 (timeout)", "16 / 499 (483 lost)", "1,855,696", "1,881,392", "0.00168"],
             ["Radix-2 FFT", "144s COM5", "7199 / 7199 (0 lost)", "1,711", "1,745", "0.000286"],
         ],
     )

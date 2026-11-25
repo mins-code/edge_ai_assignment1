@@ -64,12 +64,13 @@ def _make_clean_stream(n_clips=4, frames_per_clip=49):
     n_recv = len(fnums)
     got_feat = np.ones((n_recv, MELS), dtype=np.float32) * 0.5
 
+    packets_expected = (total_samples + SPP - 1) // SPP
     brd = {
         "bad_crc": 0,
         "seq_gaps": 0,
         "uart_errors": 0,
         "samples": total_samples,
-        "frames_ok": frames_total + 1,
+        "frames_ok": packets_expected + 1,
     }
     # expected_features = len of received (within-clip) features so fail-closed passes
     r_meta = {
@@ -103,7 +104,7 @@ def _make_controlled_skip_stream(n_clips=4, skip_tuple=(10,)):
         "seq_gaps": len(skip_tuple),
         "uart_errors": 0,
         "samples": recv_samples,
-        "frames_ok": frames_recv + 1,
+        "frames_ok": packets_expected - len(skip_tuple) + 1,
     }
     r_meta = {
         "bad_crc_back": 0,
@@ -364,12 +365,13 @@ def test_20_production_integration_shared_implementation(tmp_path):
     fsamp_all = fnums_all * HOP
     got_feat = np.ones((frames_total, MELS), dtype=np.float32) * 0.5
 
+    packets_expected = (total_samples + SPP - 1) // SPP
     brd = {
         "bad_crc": 0,
         "seq_gaps": 0,
         "uart_errors": 0,
         "samples": total_samples,
-        "frames_ok": frames_total + 1,
+        "frames_ok": packets_expected + 1,
     }
     r_meta = {
         "bad_crc_back": 0,

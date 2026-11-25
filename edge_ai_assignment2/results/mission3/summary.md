@@ -10,11 +10,12 @@
 - **FeaturePipeline memory (`nfft=512, mels=40, mfcc=0`):** `window` (`1,920 B`), `re` (`2,048 B`), `im` (`2,048 B`), `pw` (`1,028 B`), `melw` (`41,120 B`), `melv` (`160 B`), `tw_cos` (`1,024 B`), `tw_sin` (`1,024 B`), `bitrev` (`2,048 B`) = **`52,416 B` (~51.2 KiB)** (plus `2,080 B` for `dct` when `mfcc=13`).
 
 ## 2. Baseline vs. Optimized Performance (`baseline_vs_optimized.png`)
-*(Note: The baseline `dft()` benchmark contains **1 recorded run** on `COM5` because its ~1.86 s/frame compute time caused `92 / 99` frames to be lost at `speed=1.0`.)*
+*(Note: The baseline `dft()` 10-second `speed=1.0` benchmark on both `COM5` and `COM10` timed out after ~30.1 s with partial frames (`16 / 499` received, `483` lost) because its ~1.86 s/frame compute time is ~93× slower than the 20 ms hop budget.)*
 
 | Version | Port / Runs | Frames (Recv/Exp) | Median `compute_us` | p95 `compute_us` | Max `compute_us` | Max Lag (s) | Max Abs Error |
 |---|---|---:|---:|---:|---:|---:|---:|
-| Baseline (`dft`, `baseline_perf.csv`) | `COM5` (1 run) | 7 / 99 (`92` lost) | 1,855,700.0 | 1,868,659.7 | 1,873,907.0 | 12.9191 | 0.00088 dB |
+| Baseline (`dft`, `baseline_perf.csv`) | `COM5` (10s, `timeout_partial`) | 16 / 499 (`483` lost) | 1,855,697.5 | 1,869,196.8 | 1,873,891.0 | 29.5074 | 0.00168 dB |
+| Baseline (`dft`, `baseline_perf.csv`) | `COM10` (10s, `timeout_partial`) | 16 / 499 (`483` lost) | 1,855,696.0 | 1,881,391.5 | 1,911,591.0 | 29.5596 | 0.00168 dB |
 | Optimized Log-Mel (`optimized_perf.csv`) | `COM5` (3 runs) | 499 / 499 (`0` lost) | **1,711.0** | **1,712.0** | 1,895.0 | **0.0232** | 0.00018 dB |
 | Optimized Log-Mel (`optimized_perf.csv`) | `COM10` (3 runs) | 499 / 499 (`0` lost) | **1,705.0** | **1,706.0** | 1,880.0 | **0.0270** | 0.00018 dB |
 | Optimized MFCC-13 (`mfcc13_3runs.csv`) | `COM5` (3 runs) | 998 / 998 (`0` lost) | **1,734.0** | **1,739.0** | 1,916.0 | **0.0270** | 0.000092 |
