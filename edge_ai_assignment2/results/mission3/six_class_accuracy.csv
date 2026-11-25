@@ -1,0 +1,7 @@
+class,clip_id,frames,max_abs_err_db,mean_abs_err_db,rmse_db,within_0_05db
+on,0,49,5e-05,3e-06,5e-06,True
+off,24,49,5.3e-05,3e-06,5e-06,True
+stop,48,49,0.000187,3e-06,7e-06,True
+go,72,49,0.000149,4e-06,9e-06,True
+_unknown,96,49,7.2e-05,3e-06,5e-06,True
+_silence,120,49,4.6e-05,3e-06,5e-06,True

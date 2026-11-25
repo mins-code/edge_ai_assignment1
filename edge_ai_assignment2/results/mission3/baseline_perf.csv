@@ -1,0 +1,2 @@
+label,run,port,clips_sec,win,hop,mels,mfcc,speed,expected_features,received_features,lost_features,bad_crc,seq_gaps,compute_mean_us,compute_median_us,compute_p95_us,compute_max_us,lag_max_s,max_abs_err,mean_abs_err,rmse
+baseline_2s,1,COM5,2,480,320,40,0,1.0,99,7,92,0,0,1858399.3,1855700.0,1868659.7,1873907.0,12.9191,0.00088,0.00009,0.00015

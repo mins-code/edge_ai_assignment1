@@ -31,9 +31,23 @@ class FeaturePipeline {
     nb = c.nfft / 2 + 1;
     window = alloc(c.win); re = alloc(c.nfft); im = alloc(c.nfft); pw = alloc(nb);
     melw = alloc((size_t)c.mels * nb); melv = alloc(c.mels);
+    tw_cos = alloc(c.nfft / 2); tw_sin = alloc(c.nfft / 2);
+    bitrev = (int *)malloc(sizeof(int) * c.nfft);
    
     if (c.mfcc) dct = alloc((size_t)c.mfcc * c.mels);
-    if (!window || !re || !im || !pw || !melw || !melv || (c.mfcc && !dct)) { end(); return false; }
+    if (!window || !re || !im || !pw || !melw || !melv || !tw_cos || !tw_sin || !bitrev || (c.mfcc && !dct)) { end(); return false; }
+    for (int k = 0; k < c.nfft / 2; k++) {
+      float a = 2.0f * (float)M_PI * k / c.nfft;
+      tw_cos[k] = cosf(a);
+      tw_sin[k] = -sinf(a);
+    }
+    int log2n = 0;
+    while ((1 << log2n) < c.nfft) log2n++;
+    for (int i = 0; i < c.nfft; i++) {
+      int r = 0;
+      for (int b = 0; b < log2n; b++) if (i & (1 << b)) r |= 1 << (log2n - 1 - b);
+      bitrev[i] = r;
+    }
     for (int n = 0; n < c.win; n++) window[n] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * n / (c.win - 1));
     // HTK mel filterbank
     auto hz2mel = [](double f) { return 2595.0 * log10(1.0 + f / 700.0); };
@@ -79,33 +93,42 @@ class FeaturePipeline {
   }
 
   void end() {
-    float **ps[] = {&window, &re, &im, &pw, &melw, &melv, &dct};
+    float **ps[] = {&window, &re, &im, &pw, &melw, &melv, &dct, &tw_cos, &tw_sin};
     for (auto p : ps) { free(*p); *p = nullptr; }
+    free(bitrev); bitrev = nullptr;
     ok = false;
   }
   ~FeaturePipeline() { end(); }
 
  private:
   int nb = 0;
+  int *bitrev = nullptr;
   float *window = nullptr, *re = nullptr, *im = nullptr, *pw = nullptr, *melw = nullptr,
-        *melv = nullptr, *dct = nullptr;
+        *melv = nullptr, *dct = nullptr, *tw_cos = nullptr, *tw_sin = nullptr;
 
   static float *alloc(size_t n) { return (float *)malloc(sizeof(float) * n); }
 
-  // The discrete Fourier transform, straight from the formula:
-  //   X[k] = sum over n of x[n] * (cos(2*pi*k*n/N) - j*sin(2*pi*k*n/N))
-  // Only the first nfft/2+1 outputs are needed (the rest mirror them).
+  // In-place radix-2 Cooley-Tukey FFT using precomputed twiddle factors.
   void dft() {
-    static float xr[2048];
-    memcpy(xr, re, sizeof(float) * c.nfft);
-    for (int k = 0; k < nb; k++) {
-      float sr = 0, si = 0;
-      for (int n = 0; n < c.win; n++) {          // samples past win are zero padding
-        float a = 2.0f * (float)M_PI * k * n / c.nfft;
-        sr += xr[n] * cosf(a);
-        si -= xr[n] * sinf(a);
+    for (int i = 0; i < c.nfft; i++) {
+      int j = bitrev[i];
+      if (i < j) {
+        float tr = re[i]; re[i] = re[j]; re[j] = tr;
       }
-      re[k] = sr; im[k] = si;
+    }
+    for (int len = 2; len <= c.nfft; len <<= 1) {
+      int half = len >> 1;
+      int step = c.nfft / len;
+      for (int i = 0; i < c.nfft; i += len) {
+        for (int j = 0; j < half; j++) {
+          float wr = tw_cos[j * step], wi = tw_sin[j * step];
+          int u = i + j, v = u + half;
+          float tr = wr * re[v] - wi * im[v];
+          float ti = wr * im[v] + wi * re[v];
+          re[v] = re[u] - tr; im[v] = im[u] - ti;
+          re[u] += tr; im[u] += ti;
+        }
+      }
     }
   }
 };
