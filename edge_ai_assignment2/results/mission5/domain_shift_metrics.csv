@@ -1,0 +1,7 @@
+class,max_abs_err_db,mean_abs_err_db,rmse_db
+on,0.000252,3e-06,7e-06
+off,0.000286,3e-06,6e-06
+stop,0.000187,3e-06,6e-06
+go,0.000149,3e-06,6e-06
+_unknown,0.000103,3e-06,6e-06
+_silence,6.9e-05,3e-06,5e-06

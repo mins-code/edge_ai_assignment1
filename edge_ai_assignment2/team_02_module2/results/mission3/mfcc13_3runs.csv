@@ -1,0 +1,4 @@
+label,run,port,clips_sec,win,hop,mels,mfcc,speed,expected_features,received_features,lost_features,missing_frames,dup_frames,unexpected_frames,offset_mismatches,nonfinite_count,bad_crc,seq_gaps,uart_errors,samples_received,compute_mean_us,compute_median_us,compute_p95_us,compute_max_us,lag_max_s,max_abs_err,mean_abs_err,rmse
+opt_mfcc13_10s,1,COM5,10,400,160,40,13,1.0,998,998,0,0,0,0,0,0,0,0,0,160000,1735.7,1734.0,1739.0,1914.0,0.0268,9.2e-05,8e-06,1.2e-05
+opt_mfcc13_10s,2,COM5,10,400,160,40,13,1.0,998,998,0,0,0,0,0,0,0,0,0,160000,1735.6,1734.0,1739.0,1916.0,0.027,9.2e-05,8e-06,1.2e-05
+opt_mfcc13_10s,3,COM5,10,400,160,40,13,1.0,998,998,0,0,0,0,0,0,0,0,0,160000,1735.4,1734.0,1739.0,1913.0,0.027,9.2e-05,8e-06,1.2e-05

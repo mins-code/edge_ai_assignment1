@@ -1,0 +1,5 @@
+experiment,train_n,test_n,accuracy,balanced_accuracy,macro_precision,macro_recall,macro_f1
+NumPy -> NumPy,96,48,0.7917,0.7917,0.8333,0.7917,0.7926
+NumPy -> Board,96,48,0.7917,0.7917,0.8333,0.7917,0.7926
+Board -> NumPy,96,48,0.7917,0.7917,0.8333,0.7917,0.7926
+Board -> Board,96,48,0.7917,0.7917,0.8333,0.7917,0.7926

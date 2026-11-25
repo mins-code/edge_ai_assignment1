@@ -1,0 +1,17 @@
+{
+  "orig_bytes": 4608000,
+  "orig_crc": "4c3c7945",
+  "post_crc_psram": {
+    "where": "psram",
+    "n": 0,
+    "crc": 0
+  },
+  "post_crc_flash": {
+    "where": "flash",
+    "n": 4608000,
+    "crc": 1279031621
+  },
+  "dumped_bytes": 4608000,
+  "dumped_crc": "4c3c7945",
+  "byte_for_byte_match": true
+}

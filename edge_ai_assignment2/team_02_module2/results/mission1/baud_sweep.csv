@@ -1,0 +1,5 @@
+port,baud,theoretical_bps,runs,median_host_payload_bps,median_host_wire_bps,median_board_payload_bps,median_send_seconds,overhead_pct,total_bad_crc,total_seq_gaps,total_uart_errors,all_integrity_ok
+COM5,115200,11520,3,11357.76,11588.47,11369.02,8.4524,1.99,0,0,0,True
+COM5,921600,92160,3,89611.28,91431.51,89719.63,1.0713,1.99,0,0,0,True
+COM5,2000000,200000,3,184745.42,188498.06,184615.38,0.5196,1.99,0,0,0,True
+COM10,115200,1500000,3,379418.75,387125.69,147415.73,0.253,1.99,100,145,0,False

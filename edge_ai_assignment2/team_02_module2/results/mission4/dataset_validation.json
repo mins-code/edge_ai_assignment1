@@ -1,0 +1,16 @@
+{
+  "total_frames": 7199,
+  "boundary_frames_excluded": 143,
+  "clean_frames": 7056,
+  "X_shape": [
+    144,
+    49,
+    40
+  ],
+  "y_shape": [
+    144
+  ],
+  "max_diff_db": 0.000286,
+  "bad_crc": 0,
+  "seq_gaps": 0
+}
