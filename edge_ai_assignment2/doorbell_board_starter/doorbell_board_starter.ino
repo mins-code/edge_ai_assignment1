@@ -222,11 +222,26 @@ static void cmdInfo(Stream &s) {
 }
 
 static void cmdSave(Stream &s) {
-  // TODO Mission 2: write storeBuf (storeLen bytes) to the file REC_PATH with LittleFS,
-  // so the recording survives a power cut. Reply  OK SAVE n=<bytes> us=<time taken> crc=<crc32 hex>
-  // Clues: LittleFS.open(REC_PATH, "w"), f.write(ptr, len) in chunks, f.close(), crc32(storeBuf, storeLen).
-  // Before you write: does INFO's fs_total leave room? If not, which Tools settings decide it?
-  s.printf("ERR SAVE not written yet\n");
+  if (!fsOk) { s.printf("ERR SAVE no fs\n"); return; }
+  if (!storeBuf || storeLen == 0) { s.printf("ERR SAVE empty\n"); return; }
+  uint32_t t0 = micros();
+  File f = LittleFS.open(REC_PATH, "w");
+  if (!f) { s.printf("ERR SAVE open\n"); return; }
+  size_t off = 0;
+  while (off < storeLen) {
+    size_t chunk = storeLen - off;
+    if (chunk > 4096) chunk = 4096;
+    size_t w = f.write(storeBuf + off, chunk);
+    if (w != chunk) {
+      f.close();
+      s.printf("ERR SAVE write\n");
+      return;
+    }
+    off += w;
+  }
+  f.close();
+  uint32_t c = crc32(storeBuf, storeLen);
+  s.printf("OK SAVE n=%u us=%lu crc=%08x\n", (unsigned)storeLen, (unsigned long)(micros() - t0), (unsigned)c);
 }
 
 static void cmdDump(Stream &s, const char *where, bool crcOnly) {

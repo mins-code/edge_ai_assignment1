@@ -1,0 +1,11 @@
+store,requested_bytes,requested_kb,stored_bytes,samples_received,store_full,success,error
+sram,65536,64,65536,32768,0,True,
+sram,131072,128,131072,65536,0,True,
+sram,196608,192,196608,98304,0,True,
+sram,229376,224,229376,114688,0,True,
+sram,245760,240,0,0,0,False,ERR alloc sram want=245760 largest=237556
+psram,1048576,1024,1048576,524288,0,True,
+psram,4194304,4096,4194304,2097152,0,True,
+psram,7864320,7680,7864320,3932160,0,True,
+psram,8192000,8000,8192000,4096000,0,True,
+psram,8388608,8192,0,0,0,False,ERR alloc psram want=8388608 largest=8257524
