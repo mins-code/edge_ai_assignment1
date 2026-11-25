@@ -2,9 +2,46 @@
 
 Start with the local test suite after a code change. Before the grading window, run the public smoke test from a laptop outside the Codespace. The suite starts its own Uvicorn process, while the smoke test reaches the deployed server through GitHub's public port.
 
-## Last verified state
+## Latest verified state (November 25, 2026)
 
-The November 20, 2026 public check at 11:04 IST covered 419 anonymous requests. All 405 valid requests returned HTTP 200 and all 14 invalid requests returned HTTP 422. Batches of 1, 50 and 400 preserved order and matched individual predictions exactly. All 400 synthetic predictions matched the checkpoint from commit `d2ff4c5` to two decimals. Warm public round-trip latency was 48 ms at p50 and 133 ms at p95. The Codespace's idle timeout and future availability still need an owner check. [Public health endpoint](https://didactic-barnacle-x59grjp447w4cv676-8000.app.github.dev/health)
+This section supersedes the November 20, 2026 deployment record operationally.
+
+**Current public endpoint:** [Public health endpoint](https://supreme-space-fishstick-777qxrpg5p73pq4-8000.app.github.dev/health) (`https://supreme-space-fishstick-777qxrpg5p73pq4-8000.app.github.dev`)
+
+> **Operational note:** Codespaces must remain running, Uvicorn must remain active, and port **8000** must be set to **Public** during grading. The endpoint URL may change if the Codespace is recreated. Accuracy on the professor's hidden dataset is unknown because those labels have not been evaluated.
+
+### Local verification (November 25, 2026)
+
+- Python dependencies installed successfully using a temporary OpenSSL TLS 1.2 configuration.
+- `python -m pip check`: No broken requirements.
+- `python -m unittest discover -s tests -v`: **15 passed, 0 failed, 0 skipped**.
+- HTTP validation MAE: **3.978430 days** on 395 held-out Team 02 readings.
+- Uvicorn started successfully.
+
+### Public endpoint verification (November 25, 2026)
+
+- `GET /health`: HTTP 200 (`team`: 2, `params`: 1,281, `val_mae`: `3.978280755236179`).
+- `GET /model_info`: HTTP 200, returned the correct layer table (`total_bytes_f32`: 5,124, `total_bytes_int8`: 1,281, `total_macs`: 1,216, `fits_300kb_sram_f32`: `true`, `fits_300kb_sram_int8`: `true`).
+- Invalid `POST /predict` with `battery_v=0`: HTTP 422.
+- 50 individual `POST /predict` requests and one 50-row `POST /predict_batch` request were compared; all predictions matched exactly.
+
+### Public benchmark results (November 25, 2026)
+
+**Keep-alive** (`python client/bench.py --url https://supreme-space-fishstick-777qxrpg5p73pq4-8000.app.github.dev --n 200`):
+- First request: **1,179.9 ms**
+- Warm percentiles: Round trip p50 **84.686 ms**, p95 **110.935 ms**, p99 **193.495 ms** | Parse p50 **0.205 ms** | Normalize p50 **0.071 ms** | Inference p50 **0.297 ms** | Build p50 **0.007 ms** | Server total p50 **0.582 ms** | Network/framework remainder p50 **84.030 ms**.
+
+**No-keepalive** (`python client/bench.py --url https://supreme-space-fishstick-777qxrpg5p73pq4-8000.app.github.dev --n 200 --no-keepalive`):
+- First request: **1,174.5 ms**
+- Warm percentiles: Round trip p50 **1,436.189 ms**, p95 **2,099.530 ms**, p99 **2,516.143 ms** | Parse p50 **0.189 ms** | Normalize p50 **0.069 ms** | Inference p50 **0.279 ms** | Build p50 **0.006 ms** | Server total p50 **0.560 ms** | Network/framework remainder p50 **1,435.646 ms**.
+
+Establishing a new connection for each request substantially increases latency (round-trip p50 rises from 84.686 ms to 1,436.189 ms), while model inference time remains nearly identical (0.297 ms vs. 0.279 ms).
+
+Benchmark CSV files generated on the Windows development machine (not committed to Git): `bench_20261125_230643.csv` (keep-alive) and `bench_20261125_231624.csv` (no-keepalive).
+
+### Historical record (November 20, 2026)
+
+The November 20, 2026 public check at 11:04 IST covered 419 anonymous requests. All 405 valid requests returned HTTP 200 and all 14 invalid requests returned HTTP 422. Batches of 1, 50 and 400 preserved order and matched individual predictions exactly. All 400 synthetic predictions matched the checkpoint from commit `d2ff4c5` to two decimals. Warm public round-trip latency was 48 ms at p50 and 133 ms at p95. The Codespace's idle timeout and future availability still need an owner check. [Previous public health endpoint](https://didactic-barnacle-x59grjp447w4cv676-8000.app.github.dev/health)
 
 The local baseline is **15 passing tests and 3.9784 days MAE** over 395 held-out Team 02 readings sent through the API. The synthetic public checks verified deployment consistency. Accuracy on the professor's hidden readings is unknown. [Test output](reports/tests.txt) · [Evaluation checklist](reports/CHECKLIST.md) · [Training and benchmark report](reports/REPORT.md)
 
@@ -27,7 +64,7 @@ In the supplied Codespace, the root devcontainer installs dependencies. Run `cd 
 Run this from an external terminal with the project's Python environment active. Substitute the forwarded address if the Codespace has been recreated.
 
 ```sh
-export BATTERY_API_URL='https://didactic-barnacle-x59grjp447w4cv676-8000.app.github.dev'
+export BATTERY_API_URL='https://supreme-space-fishstick-777qxrpg5p73pq4-8000.app.github.dev'
 python - <<'PY'
 import os
 import requests
