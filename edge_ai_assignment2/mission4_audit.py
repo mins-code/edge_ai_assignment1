@@ -59,9 +59,11 @@ def fastest_zero_loss_speed():
         for spd in speeds:
             b = Board(port, baud=baud)
             try:
+                t0 = time.perf_counter()
                 r = b.stream(pl, fs=FS, fmt="i16", scale=1.0, win=WIN, hop=HOP,
                              nfft=NFFT, mels=MELS, mfcc=0, feat=False, store="none",
                              speed=spd, samples_per_packet=SPP)
+                elapsed_s = time.perf_counter() - t0
             finally:
                 b.close()
             time.sleep(0.3)
@@ -72,6 +74,10 @@ def fastest_zero_loss_speed():
             bcb = r.get("bad_crc_back", 0)
             samples_recv = brd.get("samples", 0)
             packets_expected = (len(x) + SPP - 1) // SPP
+            audio_s = len(x) / FS
+            eff_spd = audio_s / elapsed_s if elapsed_s > 0 else 0.0
+            payload_bps = r["bytes_sent"] / elapsed_s if elapsed_s > 0 else 0.0
+            wire_bps = (r["bytes_sent"] + r["packets_sent"] * 13) / elapsed_s if elapsed_s > 0 else 0.0
             zero_loss = int(
                 bad_crc == 0 and seq_gaps == 0 and uart_err == 0 and bcb == 0
                 and samples_recv == len(x) and r["packets_sent"] == packets_expected
@@ -80,7 +86,13 @@ def fastest_zero_loss_speed():
                 "port": port,
                 "baud": baud,
                 "interface": label,
-                "speed": spd,
+                "requested_speed": spd,
+                "audio_s": round(audio_s, 3),
+                "send_seconds": round(r["send_seconds"], 3),
+                "elapsed_s": round(elapsed_s, 3),
+                "effective_speed": round(eff_spd, 3),
+                "payload_bps": round(payload_bps, 1),
+                "wire_bps": round(wire_bps, 1),
                 "packets_expected": packets_expected,
                 "packets_sent": r["packets_sent"],
                 "frames_ok": brd.get("frames_ok", 0),
@@ -93,8 +105,8 @@ def fastest_zero_loss_speed():
                 "zero_loss": zero_loss,
             }
             rows.append(row)
-            print(f"    speed={spd:5.1f}  zero_loss={zero_loss}  bad_crc={bad_crc}  "
-                  f"seq_gaps={seq_gaps}  bad_crc_back={bcb}")
+            print(f"    req={spd:5.1f}x  eff={eff_spd:5.2f}x  zero_loss={zero_loss}  "
+                  f"bad_crc={bad_crc}  seq_gaps={seq_gaps}  wire={wire_bps:.0f} B/s")
 
     save_csv(OUT_DIR / "fastest_speed.csv", rows)
     print(f"\nSaved fastest_speed.csv ({len(rows)} rows)")
@@ -102,8 +114,8 @@ def fastest_zero_loss_speed():
     for label in ["COM5_921600", "COM10_115200"]:
         ok = [r for r in rows if r["interface"] == label and r["zero_loss"]]
         if ok:
-            best = max(ok, key=lambda r: r["speed"])
-            print(f"  {label}: fastest zero-loss speed = {best['speed']}×")
+            best = max(ok, key=lambda r: r["effective_speed"])
+            print(f"  {label}: fastest zero-loss effective={best['effective_speed']}× (requested {best['requested_speed']}×)")
         else:
             print(f"  {label}: no zero-loss speed found in sweep!")
 
@@ -412,7 +424,13 @@ Both NPZ files now contain additional arrays:
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mode", choices=["all", "speed_only"], default="all")
+    args = ap.parse_args()
     speed_rows = fastest_zero_loss_speed()
+    if args.mode == "speed_only":
+        return
     loss_rows = rebuild_loss_experiments_with_bad_crc_back()
     dataset_stats = rebuild_datasets_with_metadata()
     verify_loss_accounting(dataset_stats)

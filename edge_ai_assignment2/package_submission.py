@@ -43,53 +43,51 @@ def add_text_page(pdf: PdfPages, title: str, body: str, fontsize: int = 8.5):
 
 def generate_pdf():
     print("Generating team_02_module2_report.pdf ...")
-    commitment_memo = """
+    import csv
+    with open(ROOT / "results/mission2/sqnr_measurements.csv") as f:
+        sqnr_rows = list(csv.DictReader(f))
+    word_sqnr = next(r["sqnr_db"] for r in sqnr_rows if r["clip"] == "word_on" and r["fmt"] == "i16")
+    sil_sqnr = next(r["sqnr_db"] for r in sqnr_rows if r["clip"] == "silence" and r["fmt"] == "i16")
+
+    commitment_memo = f"""
 TEAM 02 — EDGE EXPERTS | CLIENT COMMITMENT MEMO
 Hardware: ESP32-S3-DevKitC-1 N16R8 (240 MHz, 16 MB Flash, 8 MB PSRAM)
 
 1. Audio Format, Sampling Rate, Filter & Scale:
    - Selected: 16,000 Hz, int16, Scale S=1.0, antialias=True.
-   - Measured SQNR: 76.94 dB (word) / 48.2 dB (silence), 0 clipped samples.
-   - Pre-hearing scale choice: S=1.0 uses the full normalized [-1.0, 1.0] range without
-     clipping loud speech; int8 S=0.25 clipped 116 samples and dropped accuracy to 50.00%.
+   - Measured SQNR: {word_sqnr} dB (word) / {sil_sqnr} dB (silence), 0 clipped samples.
+   - Pre-hearing scale: S=1.0 uses full [-1, 1] without clipping; int8 S=0.25 clipped 116 samples.
 
 2. Transport Port, Speed & Margin Over Real-Time:
-   - Selected: COM5 (USB-to-UART bridge) at 921,600 baud, samples_per_packet=320.
-   - Theoretical UART ceiling: 92,160 B/s (10 bits/byte) before 13 B/packet overhead.
-   - Measured fastest zero-loss effective speed: 2.756x real-time (feat=False) and 2.753x
-     real-time (feat=True) on COM5; 3.873x (feat=True) on COM10 (native USB).
-   - Margin: 2.75x real-time at 16 kHz int16 (32,000 B/s), 0 CRC/sequence/UART errors.
+   - Selected: COM5 (UART) at 921,600 baud, samples_per_packet=320.
+   - Theoretical UART ceiling: 92,160 B/s (10 bits/byte) -> 2.823x max with 13 B/640 B framing.
+   - Measured zero-loss effective speed: 2.756x (feat=False), 2.753x (feat=True) on COM5;
+     5.713x (feat=False) and 3.873x (feat=True) on COM10. Margin: ~2.75x real-time, 0 errors.
 
 3. Storage Location, Size, Arduino IDE Tools Settings & Remaining Space:
-   - Live stream buffers in PSRAM (8,388,608 B), persisted to LittleFS flash via SAVE.
-   - 144 clips = 2,304,000 samples = 4,608,000 B.
-   - Custom partitions.csv: 9.875 MiB SPIFFS-compatible LittleFS (10,354,688 B total).
-   - Remaining LittleFS space after SAVE: 5,726,208 B (~5.46 MiB free).
-   - Arduino IDE Tools: Board=ESP32S3 Dev Module, USB CDC On Boot=Enabled,
-     PSRAM=OPI PSRAM, Flash Size=16MB (128Mb), Partition Scheme=Custom.
+   - Live buffer: PSRAM (8,388,608 B), persisted to LittleFS flash via SAVE.
+   - Recording: 144 clips = 2,304,000 samples = 4,608,000 B (CRC 0x4c3c7945).
+   - Custom partitions.csv: 9.875 MiB LittleFS (10,354,688 B total); 5,726,208 B free after SAVE.
+   - Arduino IDE Tools: ESP32S3 Dev Module, USB CDC On Boot=Enabled, OPI PSRAM,
+     Flash Size=16MB (128Mb), Partition Scheme=Custom.
 
 4. Feature Settings, Compute Time vs Budget & Return Bandwidth:
    - Log-mel: win=480 (30 ms), hop=320 (20 ms), nfft=512, mels=40, 50 frames/s.
-   - Optimized Radix-2 FFT median compute time: 1,711 us/frame (1,084.6x speedup over
-     1,855,700 us baseline DFT) = 8.6% of the 20,000 us hop budget.
-   - Return data rate: 50 frames/s * (8 B header + 160 B float32 + 13 B framing) = ~9,050 B/s.
+   - Radix-2 FFT median compute: 1,711 us/frame (1,084.6x speedup) = 8.6% of 20,000 us hop.
+   - Return bandwidth: Log-Mel-40 = 8,400 B/s payload / 9,050 B/s wire;
+     MFCC-13 (10 ms hop, 100 fps) = 6,000 B/s payload / 7,300 B/s wire.
 
 5. Loss Accounting:
-   - Clean 144-clip stream: 7,200 packets sent, 7,201 frames_ok (incl. EOS), 2,304,000
-     samples, 7,199 feature frames, 0 lost, 0 bad_crc, 0 bad_crc_back, 0 seq_gaps.
-   - Deliberate skip=(10,11,200) on 144 clips: 7,197 packets sent, 7,198 frames_ok,
-     2,303,040 samples, 7,196 features, 3 lost, 3 seq_gaps.
+   - Clean 144-clip: 7,200 pkts, 7,201 frames_ok (incl. EOS), 2,304,000 samples, 7,199 features,
+     0 lost, 0 bad_crc, 0 bad_crc_back, 0 seq_gaps.
+   - Unexpected loss: fail-closed rejection prevents silent compressed-timeline labelling.
 
 6. Laptop-vs-Board Difference & Classification Impact:
-   - Identical int16 audio: max |Delta| = 0.000286 dB (32-bit float FFT vs 64-bit NumPy).
-   - Nearest-centroid (96 train / 48 test, seed=42): 79.17% on both NumPy and Board
-     (0.00% cross-domain drop).
-   - Real-world acoustic domain shifts matter: int8 S=1.0 drops Laptop->Board to 54.17%;
-     int8 S=0.25 drops to 50.00%; 8 kHz antialias=False collapses to 16.67%.
+   - Identical int16: max |Delta| = 0.000286 dB; 79.17% on both NumPy and Board (0.00% drop).
+   - Real-world shifts: int8 S=1.0 -> 54.17%, int8 S=0.25 -> 50.00%, 8 kHz no-AA -> 16.67%.
 
 7. Primary Design Risk:
-   - Real-world acoustic & microphone domain shift (unseen noise, distance, mic frequency
-     response) — numerical board-vs-laptop agreement does NOT guarantee acoustic robustness.
+   - Real-world acoustic & microphone domain shift (noise, distance, mic response).
 """
 
     missions = [
@@ -203,6 +201,7 @@ def build_package_and_zip():
     files_to_copy = [
         "mission1_pipe.py", "mission2_sampling_storage.py", "mission3_features.py",
         "mission3_speed_sweep.py", "mission4_loss_dataset.py", "mission4_audit.py",
+        "test_mission4_loss_handling.py",
         "mission5_domain_shift.py", "mission5_preprocessing.py", "mission5_board_experiments.py",
         "demo_live.py", "board_link.py", "team_audio.py", "TEAMS.csv",
         "speech_pool.npz", "README.md", "INSTALL.md", "team_02_module2_report.pdf",

@@ -36,6 +36,75 @@ def save_csv(path: Path, rows: list[dict]) -> None:
         w.writerows(rows)
 
 
+def build_loss_aware_dataset(got_feat: np.ndarray, fsamp: np.ndarray, fnums: np.ndarray,
+                             brd: dict, r: dict, clips: list, expected_samples: int,
+                             skip_tuple: tuple | None = None) -> dict:
+    """
+    Loss-aware dataset builder with fail-closed protection:
+    - If skip_tuple is None (unexpected/undisclosed loss), reject any stream with
+      bad_crc, seq_gaps, uart_errors, bad_crc_back, or sample/feature count mismatch.
+    - If skip_tuple is explicitly provided, reconstruct original sample timeline,
+      invalidate gap-crossing and boundary-crossing frames, and label valid frames.
+    """
+    bad_crc = brd.get("bad_crc", 0)
+    seq_gaps = brd.get("seq_gaps", 0)
+    uart_err = brd.get("uart_errors", 0)
+    bcb = r.get("bad_crc_back", 0)
+    recv_samples = brd.get("samples", 0)
+
+    if skip_tuple is None:
+        if (bad_crc > 0 or seq_gaps > 0 or uart_err > 0 or bcb > 0
+                or recv_samples != expected_samples or len(got_feat) != r["expected_features"]):
+            raise RuntimeError(
+                f"Fail-closed: unexplained packet loss or integrity error detected "
+                f"(bad_crc={bad_crc}, seq_gaps={seq_gaps}, uart_err={uart_err}, "
+                f"bad_crc_back={bcb}, samples={recv_samples}/{expected_samples}, "
+                f"features={len(got_feat)}/{r['expected_features']}); refusing to label compressed timeline."
+            )
+        orig_map = np.arange(expected_samples, dtype=np.int64)
+    else:
+        packets_expected = (expected_samples + SPP - 1) // SPP
+        orig_map = np.concatenate([
+            np.arange(p * SPP, min((p + 1) * SPP, expected_samples), dtype=np.int64)
+            for p in range(packets_expected) if p not in skip_tuple
+        ])
+
+    n_clips = len(clips)
+    X = np.zeros((n_clips, 49, MELS), dtype=np.float32)
+    occupied = np.zeros((n_clips, 49), dtype=bool)
+    seen = set()
+    gap_invalid = 0
+    boundary_invalid = 0
+
+    for i, (fn, s0) in enumerate(zip(fnums, fsamp)):
+        fn_i, s0_i = int(fn), int(s0)
+        if fn_i in seen:
+            raise ValueError(f"Duplicate frame number {fn_i}")
+        seen.add(fn_i)
+        if s0_i != fn_i * HOP:
+            raise ValueError(f"Offset mismatch at frame {fn_i}: {s0_i} != {fn_i * HOP}")
+        orig_start = int(orig_map[s0_i])
+        orig_end = int(orig_map[s0_i + WIN - 1])
+        if orig_end - orig_start != WIN - 1:
+            gap_invalid += 1
+            continue
+        c_start = orig_start // FS
+        c_end = orig_end // FS
+        if c_start != c_end:
+            boundary_invalid += 1
+            continue
+        fic = (orig_start % FS) // HOP
+        occupied[c_start, fic] = True
+        X[c_start, fic] = got_feat[i]
+
+    return {
+        "X": X,
+        "occupied": occupied,
+        "gap_invalid": gap_invalid,
+        "boundary_invalid": boundary_invalid,
+    }
+
+
 def run_loss_experiments() -> list[dict]:
     """Run control and deliberate packet-loss experiments on 6s of Team 02 audio."""
     x = np.concatenate([get_clip(TEAM, i, fs=FS, antialias=True) for i in range(6)])
