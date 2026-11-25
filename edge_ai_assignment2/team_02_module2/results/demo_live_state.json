@@ -1,0 +1,18 @@
+{
+  "clips_streamed": 144,
+  "samples_received": 2304000,
+  "packets_sent": 7200,
+  "frames_ok": 7201,
+  "features_received": 7199,
+  "lost_features": 0,
+  "bad_crc": 0,
+  "seq_gaps": 0,
+  "uart_errors": 0,
+  "bad_crc_back": 0,
+  "max_feature_err_db": 0.000286,
+  "compute_median_us": 1713.0,
+  "psram_bytes": 4608000,
+  "flash_saved_bytes": 4608000,
+  "flash_crc_hex": "0x4c3c7945",
+  "crc_expected": 1279031621
+}

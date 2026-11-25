@@ -34,3 +34,24 @@ Streamed all 144 clips on `COM5` (`921600` baud, `16 kHz i16`, `speed=1.0`, `spp
 
 ## 5. LLM Usage Log
 - Used LLM to implement `mission3_features.py` (including `frame_numbers`/`first_sample` alignment, 6-class validation, 3x MFCC-13, and 144-clip real-time stream) and the Radix-2 FFT in `features.h`. All measurements were executed directly on `COM5` and `COM10`.
+
+## 5. Fastest Sustainable Streaming Speed (`speed_sweep.csv`, `speed_sweep.png`)
+
+**Bottleneck analysis (requested vs. achieved effective speed):**
+- **UART theoretical limit:** At `921,600` baud with 10 bits/byte (1 start, 8 data, 1 stop), the raw physical link ceiling is **`92,160 B/s`** before packet header/CRC overhead (13 bytes per 640-byte audio payload).
+- **COM5 (921600 baud UART):**
+  - `feat=False`: fastest zero-loss effective speed = **2.756×** (requested 16.0×).
+  - `feat=True`: fastest zero-loss effective speed = **2.753×** (requested 3.0×, median compute `1752.0` µs/frame).
+  - Because COM5 achieves ~2.76× real-time both **with and without** feature computation, **the UART link (`92,160 B/s`) is the primary bottleneck**, not feature compute (`1.71 ms` vs `20 ms` hop budget = `8.6%`).
+- **COM10 (Native USB CDC):**
+  - `feat=False`: fastest zero-loss effective speed = **3.868×** (requested 4.0×); higher requested speeds overflow the board RX buffer (`bad_crc > 0`, `seq_gaps > 0`).
+  - `feat=True`: fastest zero-loss effective speed = **3.873×** (requested 4.0×, median compute `1705.0` µs/frame).
+
+## 6. Per-Class Log-Mel Spectrograms (`per_class_logmel.png`)
+Individual log-mel plots generated for one clip from each of the 6 classes using the NumPy reference
+pipeline (16 kHz, int16, scale=1.0, antialias=True, win=480, hop=320, nfft=512, mels=40):
+- **on** (clip 0), **off** (clip 24), **stop** (clip 48), **go** (clip 72),
+  **_unknown** (clip 96), **_silence** (clip 120).
+
+## 7. LLM Usage Update
+- Used LLM to implement `mission3_speed_sweep.py` for the speed-sweep (COM5 & COM10, `feat=False/True`) and per-class plot tasks.

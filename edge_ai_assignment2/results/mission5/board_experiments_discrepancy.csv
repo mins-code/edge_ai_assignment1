@@ -1,0 +1,4 @@
+config,fs,fmt,scale,antialias_board,samples_received,received_features,bad_crc,seq_gaps,compute_median_us,board_vs_quant_numpy_max_db,board_vs_quant_numpy_mean_db,board_vs_laptop_max_db,board_vs_laptop_mean_db,board_vs_laptop_rmse_db
+int8_S1_16k,16000,i8,1.0,True,2304000,7199,0,0,1709.0,0.00013,3e-06,18.377621,1.986494,2.988529
+int8_S025_16k,16000,i8,0.25,True,2304000,7199,0,0,1709.0,8.8e-05,3e-06,37.026131,1.225773,3.366306
+int16_S1_8k_noaa,8000,i16,1.0,False,1152000,7199,0,0,637.0,0.000107,3e-06,48.50634,7.781566,11.15638

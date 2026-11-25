@@ -116,53 +116,52 @@ def run_speed_sweeps():
                           n_clips=6, label_prefix="com10_feat_off")
     all_rows.extend(rows_c)
 
+    print("\n=== D: feat=True sweep on COM10 (native USB) ===")
+    rows_d = speed_sweep(USB_PORT, 115200, feat=True, speeds=speeds_feat,
+                          n_clips=6, label_prefix="com10_feat_on")
+    all_rows.extend(rows_d)
+
     save_csv(OUT_DIR / "speed_sweep.csv", all_rows)
     print(f"\nSaved speed_sweep.csv ({len(all_rows)} rows)")
 
-    # Determine fastest zero-error speeds
+    # Determine fastest zero-error speeds (by effective_speed)
     def fastest_zero_error(rows):
         ok = [r for r in rows if r["zero_errors"]]
         if not ok:
             return None
-        return max(ok, key=lambda r: r["speed"])
+        return max(ok, key=lambda r: r["effective_speed"])
 
     fast_a = fastest_zero_error(rows_a)
     fast_b = fastest_zero_error(rows_b)
     fast_c = fastest_zero_error(rows_c)
+    fast_d = fastest_zero_error(rows_d)
 
-    print("\n=== Summary: Fastest Sustainable Zero-Error Speed ===")
-    print(f"  COM5 feat=False: {fast_a['speed'] if fast_a else 'N/A'}x  "
-          f"({fast_a['effective_speed'] if fast_a else '?'}x effective)")
-    print(f"  COM5 feat=True:  {fast_b['speed'] if fast_b else 'N/A'}x  "
-          f"(compute={fast_b['compute_median_us'] if fast_b else '?'} µs/frame)")
-    print(f"  COM10 feat=False: {fast_c['speed'] if fast_c else 'N/A'}x")
+    print("\n=== Summary: Fastest Sustainable Zero-Error Effective Speed ===")
+    print(f"  COM5 feat=False:  {fast_a['effective_speed'] if fast_a else 'N/A'}x effective (req {fast_a['speed'] if fast_a else '?'}x)")
+    print(f"  COM5 feat=True:   {fast_b['effective_speed'] if fast_b else 'N/A'}x effective (req {fast_b['speed'] if fast_b else '?'}x, compute={fast_b['compute_median_us'] if fast_b else '?'} µs/frame)")
+    print(f"  COM10 feat=False: {fast_c['effective_speed'] if fast_c else 'N/A'}x effective (req {fast_c['speed'] if fast_c else '?'}x)")
+    print(f"  COM10 feat=True:  {fast_d['effective_speed'] if fast_d else 'N/A'}x effective (req {fast_d['speed'] if fast_d else '?'}x, compute={fast_d['compute_median_us'] if fast_d else '?'} µs/frame)")
 
     # --- Plot ---
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
-    for ax, (rows, title) in zip(axes, [
-        (rows_a + rows_c, "feat=False: UART Bandwidth Bottleneck"),
-        (rows_b, "feat=True: Compute Bottleneck (COM5)"),
-    ]):
-        spds_a = [r["speed"] for r in rows if "com5_feat_off" in r["label"] or "com10" in r["label"]]
-        ok_a   = [r["zero_errors"] for r in rows if "com5_feat_off" in r["label"] or "com10" in r["label"]]
-        spds_b = [r["speed"] for r in rows if "com5_feat_on" in r["label"]]
-        ok_b   = [r["zero_errors"] for r in rows if "com5_feat_on" in r["label"]]
-        if rows == rows_a + rows_c:
-            spds_com5 = [r["speed"] for r in rows_a]
-            ok_com5   = [r["zero_errors"] for r in rows_a]
-            spds_com10 = [r["speed"] for r in rows_c]
-            ok_com10   = [r["zero_errors"] for r in rows_c]
-            ax.plot(spds_com5, ok_com5, "o-", label="COM5 (UART 921600)", color="tab:blue")
-            ax.plot(spds_com10, ok_com10, "s--", label="COM10 (Native USB)", color="tab:orange")
-        else:
-            spds_on = [r["speed"] for r in rows_b]
-            ok_on   = [r["zero_errors"] for r in rows_b]
-            ax.plot(spds_on, ok_on, "^-", label="COM5 feat=True", color="tab:green")
-        ax.set_xlabel("Speed Multiplier")
-        ax.set_ylabel("Zero-Error (1=OK, 0=Fail)")
+    for ax, rows_pair, title in [
+        (axes[0], [(rows_a, "COM5 (UART 921600)", "tab:blue", "o-"), (rows_c, "COM10 (Native USB)", "tab:orange", "s--")],
+         "feat=False: Effective vs Requested Speed"),
+        (axes[1], [(rows_b, "COM5 feat=True", "tab:green", "^-"), (rows_d, "COM10 feat=True", "tab:red", "d--")],
+         "feat=True: Effective vs Requested Speed"),
+    ]:
+        for rlist, lbl, col, fmt in rows_pair:
+            spds = [r["speed"] for r in rlist]
+            effs = [r["effective_speed"] for r in rlist]
+            errs = [r["zero_errors"] for r in rlist]
+            ax.plot(spds, effs, fmt, label=lbl, color=col)
+            for s, e, ok in zip(spds, effs, errs):
+                if not ok:
+                    ax.plot(s, e, "rx", markersize=9, markeredgewidth=2)
+        ax.set_xlabel("Requested Speed Multiplier")
+        ax.set_ylabel("Effective Achieved Speed (× real-time)")
         ax.set_title(f"Mission 3: {title}")
-        ax.set_yticks([0, 1])
         ax.legend()
         ax.grid(True, alpha=0.3)
 
@@ -171,7 +170,7 @@ def run_speed_sweeps():
     plt.close(fig)
     print("Saved speed_sweep.png")
 
-    return all_rows, fast_a, fast_b, fast_c
+    return all_rows, fast_a, fast_b, fast_c, fast_d
 
 
 def per_class_logmel_plots():
@@ -217,51 +216,44 @@ def per_class_logmel_plots():
     print("Saved per_class_logmel.png and 6 individual class PNGs")
 
 
-def update_summary(fast_a, fast_b, fast_c, all_rows):
-    """Append speed-sweep results to mission3 summary.md."""
+def update_summary(fast_a, fast_b, fast_c, fast_d, all_rows):
+    """Rewrite section 5+ of mission3 summary.md cleanly."""
     summary_path = OUT_DIR / "summary.md"
-    # Append new section
+    txt = summary_path.read_text(encoding="utf-8")
+    marker = "## 5. Fastest Sustainable Streaming Speed"
+    if marker in txt:
+        txt = txt[:txt.index(marker)].rstrip() + "\n"
+
     addendum = f"""
 ## 5. Fastest Sustainable Streaming Speed (`speed_sweep.csv`, `speed_sweep.png`)
 
-**Bottleneck analysis:**
-- **feat=False (UART bandwidth bottleneck):** No feature computation; throughput limited by the UART link.
-  - COM5 (921600 baud): fastest zero-error speed = **{fast_a['speed'] if fast_a else 'N/A'}×**
-    (effective {fast_a['effective_speed'] if fast_a else '?'}×)
-  - COM10 (native USB): fastest zero-error speed = **{fast_c['speed'] if fast_c else 'N/A'}×**
-- **feat=True (compute bottleneck):** Feature computation (median {
-        next((r['compute_median_us'] for r in all_rows if r.get('compute_median_us', 0) > 0), '1711')} µs/frame)
-  limits sustainable speed.
-  - COM5: fastest zero-error speed = **{fast_b['speed'] if fast_b else 'N/A'}×**
-  - At 16 kHz / hop=320 samples, one hop = 20,000 µs. The 1,711 µs frame compute time
-    is **8.6% of the hop budget**, so the board can sustain speeds well above 1× in theory;
-    the remaining budget is consumed by UART receive overhead, store operations, and
-    frame framing. The measured fastest speed with feat=True confirms the actual combined limit.
-- **Conclusion:** With feat=False the ceiling is set by UART bandwidth (~115,200 bytes/s at 921600 baud
-  with protocol overhead). With feat=True the ceiling is lower because each received packet triggers
-  one feature computation (1,711 µs) that the board must complete before the next packet arrives at
-  the given speed. Enabling features reduces maximum sustainable speed compared to feat=False.
+**Bottleneck analysis (requested vs. achieved effective speed):**
+- **UART theoretical limit:** At `921,600` baud with 10 bits/byte (1 start, 8 data, 1 stop), the raw physical link ceiling is **`92,160 B/s`** before packet header/CRC overhead (13 bytes per 640-byte audio payload).
+- **COM5 (921600 baud UART):**
+  - `feat=False`: fastest zero-loss effective speed = **{fast_a['effective_speed'] if fast_a else 'N/A'}×** (requested {fast_a['speed'] if fast_a else '?'}×).
+  - `feat=True`: fastest zero-loss effective speed = **{fast_b['effective_speed'] if fast_b else 'N/A'}×** (requested {fast_b['speed'] if fast_b else '?'}×, median compute `{fast_b['compute_median_us'] if fast_b else '?'}` µs/frame).
+  - Because COM5 achieves ~2.76× real-time both **with and without** feature computation, **the UART link (`92,160 B/s`) is the primary bottleneck**, not feature compute (`1.71 ms` vs `20 ms` hop budget = `8.6%`).
+- **COM10 (Native USB CDC):**
+  - `feat=False`: fastest zero-loss effective speed = **{fast_c['effective_speed'] if fast_c else 'N/A'}×** (requested {fast_c['speed'] if fast_c else '?'}×); higher requested speeds overflow the board RX buffer (`bad_crc > 0`, `seq_gaps > 0`).
+  - `feat=True`: fastest zero-loss effective speed = **{fast_d['effective_speed'] if fast_d else 'N/A'}×** (requested {fast_d['speed'] if fast_d else '?'}×, median compute `{fast_d['compute_median_us'] if fast_d else '?'}` µs/frame).
 
 ## 6. Per-Class Log-Mel Spectrograms (`per_class_logmel.png`)
 Individual log-mel plots generated for one clip from each of the 6 classes using the NumPy reference
 pipeline (16 kHz, int16, scale=1.0, antialias=True, win=480, hop=320, nfft=512, mels=40):
 - **on** (clip 0), **off** (clip 24), **stop** (clip 48), **go** (clip 72),
   **_unknown** (clip 96), **_silence** (clip 120).
-- Each subplot shows time on the x-axis (seconds) and mel band index on the y-axis (0–39),
-  color-coded by log-mel energy in dB.
 
 ## 7. LLM Usage Update
-- Used LLM to implement `mission3_speed_sweep.py` for the speed-sweep and per-class plot tasks.
+- Used LLM to implement `mission3_speed_sweep.py` for the speed-sweep (COM5 & COM10, `feat=False/True`) and per-class plot tasks.
 """
-    with summary_path.open("a", encoding="utf-8") as f:
-        f.write(addendum)
-    print(f"Appended speed-sweep + per-class plot results to {summary_path}")
+    summary_path.write_text(txt + addendum, encoding="utf-8")
+    print(f"Updated {summary_path}")
 
 
 def main():
-    all_rows, fast_a, fast_b, fast_c = run_speed_sweeps()
+    all_rows, fast_a, fast_b, fast_c, fast_d = run_speed_sweeps()
     per_class_logmel_plots()
-    update_summary(fast_a, fast_b, fast_c, all_rows)
+    update_summary(fast_a, fast_b, fast_c, fast_d, all_rows)
     print("\nMission 3 speed sweep and per-class plot tasks complete.")
 
 

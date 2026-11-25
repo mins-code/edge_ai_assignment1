@@ -37,30 +37,21 @@ Streamed all 144 clips on `COM5` (`921600` baud, `16 kHz i16`, `speed=1.0`, `spp
 
 ## 5. Fastest Sustainable Streaming Speed (`speed_sweep.csv`, `speed_sweep.png`)
 
-**Bottleneck analysis:**
-- **feat=False (UART bandwidth bottleneck):** No feature computation; throughput limited by the UART link.
-  - COM5 (921600 baud): fastest zero-error speed = **32.0×**
-    (effective 2.757×)
-  - COM10 (native USB): fastest zero-error speed = **4.0×**
-- **feat=True (compute bottleneck):** Feature computation (median 1710.0 µs/frame)
-  limits sustainable speed.
-  - COM5: fastest zero-error speed = **8.0×**
-  - At 16 kHz / hop=320 samples, one hop = 20,000 µs. The 1,711 µs frame compute time
-    is **8.6% of the hop budget**, so the board can sustain speeds well above 1× in theory;
-    the remaining budget is consumed by UART receive overhead, store operations, and
-    frame framing. The measured fastest speed with feat=True confirms the actual combined limit.
-- **Conclusion:** With feat=False the ceiling is set by UART bandwidth (~115,200 bytes/s at 921600 baud
-  with protocol overhead). With feat=True the ceiling is lower because each received packet triggers
-  one feature computation (1,711 µs) that the board must complete before the next packet arrives at
-  the given speed. Enabling features reduces maximum sustainable speed compared to feat=False.
+**Bottleneck analysis (requested vs. achieved effective speed):**
+- **UART theoretical limit:** At `921,600` baud with 10 bits/byte (1 start, 8 data, 1 stop), the raw physical link ceiling is **`92,160 B/s`** before packet header/CRC overhead (13 bytes per 640-byte audio payload).
+- **COM5 (921600 baud UART):**
+  - `feat=False`: fastest zero-loss effective speed = **2.756×** (requested 16.0×).
+  - `feat=True`: fastest zero-loss effective speed = **2.753×** (requested 3.0×, median compute `1752.0` µs/frame).
+  - Because COM5 achieves ~2.76× real-time both **with and without** feature computation, **the UART link (`92,160 B/s`) is the primary bottleneck**, not feature compute (`1.71 ms` vs `20 ms` hop budget = `8.6%`).
+- **COM10 (Native USB CDC):**
+  - `feat=False`: fastest zero-loss effective speed = **3.868×** (requested 4.0×); higher requested speeds overflow the board RX buffer (`bad_crc > 0`, `seq_gaps > 0`).
+  - `feat=True`: fastest zero-loss effective speed = **3.873×** (requested 4.0×, median compute `1705.0` µs/frame).
 
 ## 6. Per-Class Log-Mel Spectrograms (`per_class_logmel.png`)
 Individual log-mel plots generated for one clip from each of the 6 classes using the NumPy reference
 pipeline (16 kHz, int16, scale=1.0, antialias=True, win=480, hop=320, nfft=512, mels=40):
 - **on** (clip 0), **off** (clip 24), **stop** (clip 48), **go** (clip 72),
   **_unknown** (clip 96), **_silence** (clip 120).
-- Each subplot shows time on the x-axis (seconds) and mel band index on the y-axis (0–39),
-  color-coded by log-mel energy in dB.
 
 ## 7. LLM Usage Update
-- Used LLM to implement `mission3_speed_sweep.py` for the speed-sweep and per-class plot tasks.
+- Used LLM to implement `mission3_speed_sweep.py` for the speed-sweep (COM5 & COM10, `feat=False/True`) and per-class plot tasks.

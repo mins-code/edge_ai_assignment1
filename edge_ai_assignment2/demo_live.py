@@ -16,6 +16,8 @@ COM5 must be connected and the ESP32-S3 must have the optimized Radix-2 FFT
 firmware loaded with the custom partitions.csv (9.875 MiB LittleFS).
 """
 
+import argparse
+import json
 import sys
 import time
 import zlib
@@ -52,7 +54,7 @@ def step(n, text):
     hr()
 
 
-def demo():
+def demo(phase: str = "all"):
     hr()
     print("  Team 02 — The Doorbell's Ears: Integrated Live Demonstration")
     print("  ESP32-S3-N16R8 | 240 MHz | 16 MB Flash | 8 MB PSRAM")
@@ -166,16 +168,39 @@ def demo():
 
     crc_expected = save_info.get("crc", 0) if save_info else 0
 
+    if phase == "stream_save":
+        Path("results/demo_live_state.json").write_text(json.dumps({
+            "clips_streamed": len(clips),
+            "samples_received": n_recv_samples,
+            "packets_sent": stream_result["packets_sent"],
+            "frames_ok": (stream_result["board"] or {}).get("frames_ok", 0),
+            "features_received": n_recv_frames,
+            "lost_features": lost_features,
+            "bad_crc": bad_crc,
+            "seq_gaps": seq_gaps,
+            "uart_errors": uart_err,
+            "bad_crc_back": bad_crc_back,
+            "max_feature_err_db": round(max_err, 6),
+            "compute_median_us": round(compute_med, 1),
+            "psram_bytes": n_bytes_expected,
+            "flash_saved_bytes": n_saved,
+            "flash_crc_hex": f"0x{crc_expected:08x}",
+            "crc_expected": crc_expected,
+        }, indent=2))
+        print("\n  [stream_save phase complete] Disconnect both USB cables, wait 2s, reconnect, then run --phase verify.")
+        return
+
     # ------------------------------------------------------------------ Step 5
     step(5, "Power-cycle verification")
-    print("\n  *** ACTION REQUIRED ***")
-    print("  1. DISCONNECT both USB cables from the ESP32-S3.")
-    print("  2. Wait at least 2 seconds (until PSRAM is fully cleared).")
-    print("  3. RECONNECT both USB cables.")
-    print("  4. Wait for the board to boot (the native USB COM10 may take ~5 seconds).")
-    print()
-    input("  Press ENTER when the board is reconnected and ready ...")
-    time.sleep(2.0)
+    if phase == "all":
+        print("\n  *** ACTION REQUIRED ***")
+        print("  1. DISCONNECT both USB cables from the ESP32-S3.")
+        print("  2. Wait at least 2 seconds (until PSRAM is fully cleared).")
+        print("  3. RECONNECT both USB cables.")
+        print("  4. Wait for the board to boot (the native USB COM10 may take ~5 seconds).")
+        print()
+        input("  Press ENTER when the board is reconnected and ready ...")
+        time.sleep(2.0)
 
     # ------------------------------------------------------------------ Step 6
     step(6, "Verify PSRAM is empty and flash CRC matches")
@@ -229,6 +254,59 @@ def demo():
     print(f"  Byte-for-byte check:   PASS")
     hr("*")
 
+    report = {
+        "clips_streamed": len(clips),
+        "samples_received": n_recv_samples,
+        "packets_sent": stream_result["packets_sent"],
+        "frames_ok": (stream_result["board"] or {}).get("frames_ok", 0),
+        "features_received": n_recv_frames,
+        "lost_features": lost_features,
+        "bad_crc": bad_crc,
+        "seq_gaps": seq_gaps,
+        "uart_errors": uart_err,
+        "bad_crc_back": bad_crc_back,
+        "max_feature_err_db": round(max_err, 6),
+        "compute_median_us": round(compute_med, 1),
+        "psram_bytes": n_bytes_expected,
+        "flash_saved_bytes": n_saved,
+        "flash_crc_hex": f"0x{crc_expected:08x}",
+        "post_powercycle_psram_bytes": psram_crc.get("n", -1),
+        "post_powercycle_flash_crc_hex": f"0x{crc_flash:08x}",
+        "byte_for_byte_match": True,
+    }
+    Path("results/demo_live_report.json").write_text(json.dumps(report, indent=2))
+    print("  Saved machine-readable report: results/demo_live_report.json")
+
 
 if __name__ == "__main__":
-    demo()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--phase", choices=["all", "stream_save", "verify"], default="all")
+    args = ap.parse_args()
+    if args.phase == "verify":
+        state = json.loads(Path("results/demo_live_state.json").read_text())
+        clips = clip_list(TEAM)
+        x_all = np.concatenate([get_clip(TEAM, cid, fs=FS, antialias=True) for cid, _ in clips])
+        pl_all = pack(x_all, fmt=FMT, scale=SCALE)
+        n_bytes_expected = len(x_all) * 2
+        crc_expected = state["crc_expected"]
+        b = Board(COM_PORT, baud=BAUD)
+        try:
+            psram_crc = b.crc("psram")
+            assert psram_crc.get("n", -1) == 0, f"PSRAM not empty: {psram_crc}"
+            flash_crc = b.crc("flash")
+            assert flash_crc.get("n", 0) == n_bytes_expected, f"Flash n mismatch: {flash_crc}"
+            assert flash_crc.get("crc", 0) == crc_expected, f"Flash CRC mismatch: {flash_crc}"
+            dump_bytes = b.dump("flash")
+            assert dump_bytes == pl_all[:n_bytes_expected], "Byte-for-byte mismatch!"
+        finally:
+            b.close()
+        state.pop("crc_expected", None)
+        state.update({
+            "post_powercycle_psram_bytes": psram_crc.get("n", -1),
+            "post_powercycle_flash_crc_hex": f"0x{flash_crc.get('crc', 0):08x}",
+            "byte_for_byte_match": True,
+        })
+        Path("results/demo_live_report.json").write_text(json.dumps(state, indent=2))
+        print("  ✓ VERIFY PASSED. Saved results/demo_live_report.json")
+    else:
+        demo(args.phase)

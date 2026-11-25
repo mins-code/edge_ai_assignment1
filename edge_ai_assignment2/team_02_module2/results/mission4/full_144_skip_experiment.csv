@@ -1,0 +1,2 @@
+experiment,skip,packets_expected,packets_skipped,packets_sent,frames_ok,bad_crc,bad_crc_back,seq_gaps,uart_errors,samples_expected,samples_received,expected_features,received_features,lost_features
+full_144_skip_10_11_200,"(10, 11, 200)",7200,3,7197,7198,0,0,3,0,2304000,2303040,7199,7196,3

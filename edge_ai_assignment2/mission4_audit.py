@@ -70,18 +70,26 @@ def fastest_zero_loss_speed():
             seq_gaps = brd.get("seq_gaps", 0)
             uart_err = brd.get("uart_errors", 0)
             bcb = r.get("bad_crc_back", 0)
-            zero_loss = int(bad_crc == 0 and seq_gaps == 0 and uart_err == 0 and bcb == 0)
+            samples_recv = brd.get("samples", 0)
+            packets_expected = (len(x) + SPP - 1) // SPP
+            zero_loss = int(
+                bad_crc == 0 and seq_gaps == 0 and uart_err == 0 and bcb == 0
+                and samples_recv == len(x) and r["packets_sent"] == packets_expected
+            )
             row = {
                 "port": port,
                 "baud": baud,
                 "interface": label,
                 "speed": spd,
+                "packets_expected": packets_expected,
                 "packets_sent": r["packets_sent"],
+                "frames_ok": brd.get("frames_ok", 0),
                 "bad_crc": bad_crc,
                 "bad_crc_back": bcb,
                 "seq_gaps": seq_gaps,
                 "uart_errors": uart_err,
-                "samples_received": brd.get("samples", 0),
+                "samples_expected": len(x),
+                "samples_received": samples_recv,
                 "zero_loss": zero_loss,
             }
             rows.append(row)
@@ -267,11 +275,52 @@ def rebuild_datasets_with_metadata():
         "bad_crc_back": bcb,
         "seq_gaps": brd.get("seq_gaps", 0),
         "packets_sent": r["packets_sent"],
+        "frames_ok": brd.get("frames_ok", 0),
         "samples_received": brd.get("samples", 0),
         "expected_features": r["expected_features"],
         "received_features": len(got_feat),
         "lost_features": r["lost_features"],
     }
+
+
+def run_full_stream_skip_experiment() -> dict:
+    """README-required full 144-clip stream with skip=(10, 11, 200)."""
+    print("\n=== Task 3b: Full 144-Clip Stream with skip=(10, 11, 200) ===")
+    clips = clip_list(TEAM)
+    x_all = np.concatenate([get_clip(TEAM, cid, fs=FS, antialias=True) for cid, _ in clips])
+    pl_all = pack(x_all, fmt="i16", scale=1.0)
+    packets_expected = (len(x_all) + SPP - 1) // SPP
+    skip_tuple = (10, 11, 200)
+
+    b = Board(COM_PORT, baud=BAUD)
+    try:
+        r = b.stream(pl_all, fs=FS, fmt="i16", scale=1.0, win=WIN, hop=HOP,
+                     nfft=NFFT, mels=MELS, mfcc=0, feat=True, store="none",
+                     speed=1.0, samples_per_packet=SPP, skip=skip_tuple)
+    finally:
+        b.close()
+    time.sleep(0.3)
+    brd = r["board"] or {}
+    row = {
+        "experiment": "full_144_skip_10_11_200",
+        "skip": str(skip_tuple),
+        "packets_expected": packets_expected,
+        "packets_skipped": len(skip_tuple),
+        "packets_sent": r["packets_sent"],
+        "frames_ok": brd.get("frames_ok", 0),
+        "bad_crc": brd.get("bad_crc", 0),
+        "bad_crc_back": r.get("bad_crc_back", 0),
+        "seq_gaps": brd.get("seq_gaps", 0),
+        "uart_errors": brd.get("uart_errors", 0),
+        "samples_expected": len(x_all),
+        "samples_received": brd.get("samples", 0),
+        "expected_features": r["expected_features"],
+        "received_features": len(r["features"]),
+        "lost_features": r["lost_features"],
+    }
+    save_csv(OUT_DIR / "full_144_skip_experiment.csv", [row])
+    print("  Full-stream skip=(10,11,200):", row)
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -306,9 +355,13 @@ def verify_loss_accounting(dataset_stats: dict):
     print("  All loss accounting assertions PASSED.")
 
 
-def update_summary(speed_rows, loss_rows, dataset_stats):
+def update_summary(speed_rows, loss_rows, dataset_stats, full_skip_row):
     """Append audit results to mission4 summary.md."""
     summary_path = OUT_DIR / "summary.md"
+    txt = summary_path.read_text(encoding="utf-8")
+    marker = "## 3. Fastest Zero-Loss Streaming Speed"
+    if marker in txt:
+        txt = txt[:txt.index(marker)].rstrip() + "\n"
 
     # Fastest zero-loss speeds
     fastest = {}
@@ -319,31 +372,30 @@ def update_summary(speed_rows, loss_rows, dataset_stats):
     addendum = f"""
 ## 3. Fastest Zero-Loss Streaming Speed (`fastest_speed.csv`)
 
-Swept `speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"`:
-- **COM5 (921600 baud, UART):** Fastest zero-loss speed = **{fastest.get('COM5_921600', 'N/A')}×**
-- **COM10 (native USB, 115200 baud):** Fastest zero-loss speed = **{fastest.get('COM10_115200', 'N/A')}×**
+Swept `speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"` (requiring `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`, `samples_received==samples_expected`, and `packets_sent==packets_expected`):
+- **COM5 (921600 baud, UART):** Fastest zero-loss requested speed = **{fastest.get('COM5_921600', 'N/A')}×**
+- **COM10 (native USB, 115200 baud):** Fastest zero-loss requested speed = **{fastest.get('COM10_115200', 'N/A')}×**
 - `bad_crc_back` (return-path CRC failures) = 0 at all zero-loss speeds.
 
 ## 4. Full 144-Clip Loss Accounting (Verified)
 
-| Metric | Value |
-|---|---:|
-| Clips | 144 |
-| Packets sent | {dataset_stats.get('packets_sent', 'N/A')} |
-| Samples expected | 2,304,000 |
-| Samples received | {dataset_stats.get('samples_received', 'N/A'):,} |
-| `board["frames_ok"]` | {dataset_stats.get('received_features', 'N/A') + 1} *(incl. EOS frame)* |
-| Expected feature frames | 7,199 |
-| Received feature frames | {dataset_stats.get('received_features', 'N/A')} |
-| Lost feature frames | {dataset_stats.get('lost_features', 0)} |
-| `bad_crc` | {dataset_stats.get('bad_crc', 0)} |
-| `bad_crc_back` | {dataset_stats.get('bad_crc_back', 0)} |
-| `seq_gaps` | {dataset_stats.get('seq_gaps', 0)} |
-| `uart_errors` | 0 |
-| Boundary-crossing frames excluded | 143 |
-| Clean within-clip frames in dataset | 7,056 (144 × 49) |
-
-All assertions passed: zero-error 144-clip stream with complete feature delivery.
+| Metric | Clean 144-Clip | Full 144-Clip `skip=(10,11,200)` |
+|---|---:|---:|
+| Clips | 144 | 144 |
+| Packets expected | 7,200 | 7,200 |
+| Packets sent | {dataset_stats.get('packets_sent', 'N/A')} | {full_skip_row.get('packets_sent', 'N/A')} |
+| `board["frames_ok"]` | {dataset_stats.get('frames_ok', 'N/A')} *(incl. EOS)* | {full_skip_row.get('frames_ok', 'N/A')} *(incl. EOS)* |
+| Samples expected | 2,304,000 | 2,304,000 |
+| Samples received | {dataset_stats.get('samples_received', 'N/A'):,} | {full_skip_row.get('samples_received', 'N/A'):,} |
+| Expected feature frames | 7,199 | 7,199 |
+| Received feature frames | {dataset_stats.get('received_features', 'N/A')} | {full_skip_row.get('received_features', 'N/A')} |
+| Lost feature frames | {dataset_stats.get('lost_features', 0)} | {full_skip_row.get('lost_features', 'N/A')} |
+| `bad_crc` | {dataset_stats.get('bad_crc', 0)} | {full_skip_row.get('bad_crc', 0)} |
+| `bad_crc_back` | {dataset_stats.get('bad_crc_back', 0)} | {full_skip_row.get('bad_crc_back', 0)} |
+| `seq_gaps` | {dataset_stats.get('seq_gaps', 0)} | {full_skip_row.get('seq_gaps', 0)} |
+| `uart_errors` | 0 | {full_skip_row.get('uart_errors', 0)} |
+| Boundary-crossing frames excluded | 143 | — |
+| Clean within-clip frames in dataset | 7,056 (144 × 49) | — |
 
 ## 5. Dataset Metadata Update (`dataset_board.npz`, `dataset_numpy.npz`)
 Both NPZ files now contain additional arrays:
@@ -353,11 +405,10 @@ Both NPZ files now contain additional arrays:
 
 ## 6. LLM Usage Update
 - Used LLM to implement `mission4_audit.py` for the speed sweep, `bad_crc_back` enrichment,
-  dataset metadata addition, and 144-clip loss accounting verification.
+  full-stream `skip=(10,11,200)` experiment, dataset metadata addition, and 144-clip loss accounting verification.
 """
-    with summary_path.open("a", encoding="utf-8") as f:
-        f.write(addendum)
-    print(f"Appended audit results to {summary_path}")
+    summary_path.write_text(txt + addendum, encoding="utf-8")
+    print(f"Updated {summary_path}")
 
 
 def main():
@@ -365,7 +416,8 @@ def main():
     loss_rows = rebuild_loss_experiments_with_bad_crc_back()
     dataset_stats = rebuild_datasets_with_metadata()
     verify_loss_accounting(dataset_stats)
-    update_summary(speed_rows, loss_rows, dataset_stats)
+    full_skip_row = run_full_stream_skip_experiment()
+    update_summary(speed_rows, loss_rows, dataset_stats, full_skip_row)
     print("\nMission 4 audit tasks complete.")
 
 

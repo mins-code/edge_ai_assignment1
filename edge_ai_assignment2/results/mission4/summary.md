@@ -17,3 +17,40 @@
 
 ## 3. LLM Usage Log
 - Used LLM to implement `mission4_loss_dataset.py`, run the deliberate packet-loss and 144-clip dataset experiments on `COM5`, and draft `data_card.md`.
+
+## 3. Fastest Zero-Loss Streaming Speed (`fastest_speed.csv`)
+
+Swept `speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"` (requiring `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`, `samples_received==samples_expected`, and `packets_sent==packets_expected`):
+- **COM5 (921600 baud, UART):** Fastest zero-loss requested speed = **32.0×**
+- **COM10 (native USB, 115200 baud):** Fastest zero-loss requested speed = **6.0×**
+- `bad_crc_back` (return-path CRC failures) = 0 at all zero-loss speeds.
+
+## 4. Full 144-Clip Loss Accounting (Verified)
+
+| Metric | Clean 144-Clip | Full 144-Clip `skip=(10,11,200)` |
+|---|---:|---:|
+| Clips | 144 | 144 |
+| Packets expected | 7,200 | 7,200 |
+| Packets sent | 7200 | 7197 |
+| `board["frames_ok"]` | 7201 *(incl. EOS)* | 7198 *(incl. EOS)* |
+| Samples expected | 2,304,000 | 2,304,000 |
+| Samples received | 2,304,000 | 2,303,040 |
+| Expected feature frames | 7,199 | 7,199 |
+| Received feature frames | 7199 | 7196 |
+| Lost feature frames | 0 | 3 |
+| `bad_crc` | 0 | 0 |
+| `bad_crc_back` | 0 | 0 |
+| `seq_gaps` | 0 | 3 |
+| `uart_errors` | 0 | 0 |
+| Boundary-crossing frames excluded | 143 | — |
+| Clean within-clip frames in dataset | 7,056 (144 × 49) | — |
+
+## 5. Dataset Metadata Update (`dataset_board.npz`, `dataset_numpy.npz`)
+Both NPZ files now contain additional arrays:
+- `first_sample`: shape `(144, 49)` — original `first_sample` offset for each stored feature frame.
+- `frame_numbers`: shape `(144, 49)` — global frame index for each stored feature frame.
+- `X`, `y`, `classes`, `clip_ids` are **bit-identical** to the previous dataset build.
+
+## 6. LLM Usage Update
+- Used LLM to implement `mission4_audit.py` for the speed sweep, `bad_crc_back` enrichment,
+  full-stream `skip=(10,11,200)` experiment, dataset metadata addition, and 144-clip loss accounting verification.
