@@ -1,0 +1,12 @@
+label,accuracy,balanced_accuracy
+C1_f32_to_f32,0.7917,0.7917
+C1_f32_to_board,0.7917,0.7917
+C2_numpy_to_numpy,0.7917,0.7917
+C2_numpy_to_board,0.7917,0.7917
+C3_i8s1_to_i8s1,0.7917,0.7917
+C3_i8s1_to_board,0.5625,0.5625
+C4_i8s025_to_i8s025,0.6667,0.6667
+C4_i8s025_to_board,0.6042,0.6042
+C5a_8k_noaa_to_8k_noaa,0.6875,0.6875
+C5b_8k_aa_to_8k_aa,0.6875,0.6875
+C5a_8k_noaa_to_8k_aa,0.3542,0.3542
