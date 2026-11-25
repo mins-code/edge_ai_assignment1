@@ -379,15 +379,31 @@ def update_summary(speed_rows, loss_rows, dataset_stats, full_skip_row):
     fastest = {}
     for label in ["COM5_921600", "COM10_115200"]:
         ok = [r for r in speed_rows if r["interface"] == label and r["zero_loss"]]
-        fastest[label] = max(ok, key=lambda r: r["speed"])["speed"] if ok else "N/A"
+        if ok:
+            best = max(ok, key=lambda r: r["effective_speed"])
+            fastest[label] = {
+                "requested": best["requested_speed"],
+                "effective": best["effective_speed"],
+                "wire_bps": best.get("wire_bps", "N/A"),
+            }
+        else:
+            fastest[label] = None
+
+    com5 = fastest.get("COM5_921600")
+    com10 = fastest.get("COM10_115200")
+    com5_str = (f"req={com5['requested']}× eff={com5['effective']}× wire={com5['wire_bps']:.0f} B/s"
+                if com5 else "N/A")
+    com10_str = (f"req={com10['requested']}× eff={com10['effective']}× wire={com10['wire_bps']:.0f} B/s"
+                 if com10 else "N/A")
 
     addendum = f"""
 ## 3. Fastest Zero-Loss Streaming Speed (`fastest_speed.csv`)
 
-Swept `speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"` (requiring `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`, `samples_received==samples_expected`, and `packets_sent==packets_expected`):
-- **COM5 (921600 baud, UART):** Fastest zero-loss requested speed = **{fastest.get('COM5_921600', 'N/A')}×**
-- **COM10 (native USB, 115200 baud):** Fastest zero-loss requested speed = **{fastest.get('COM10_115200', 'N/A')}×**
+Swept `requested_speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"` (requiring `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`, `samples_received==samples_expected`, and `packets_sent==packets_expected`):
+- **COM5 (921600 baud, UART):** Fastest zero-loss: **{com5_str}**
+- **COM10 (native USB, 115200 baud):** Fastest zero-loss: **{com10_str}**
 - `bad_crc_back` (return-path CRC failures) = 0 at all zero-loss speeds.
+- Note: COM5 effective speed is UART-limited (~89 kB/s wire regardless of requested speed ≥ 2.74×).
 
 ## 4. Full 144-Clip Loss Accounting (Verified)
 

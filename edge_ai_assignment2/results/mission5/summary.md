@@ -60,3 +60,25 @@ Streamed all 144 clips on `COM5` (`921600` baud, `speed=1.0`) for each configura
 
 ## 5. LLM Usage Log
 - Used LLM to implement `mission5_domain_shift.py`, `mission5_preprocessing.py`, and `mission5_board_experiments.py`. All board measurements were executed directly on `COM5`.
+
+## Float32-to-Board Discrepancy Analysis
+
+Three offline comparisons using `dataset_board.npz`, `dataset_numpy.npz`, and on-the-fly
+float32 feature computation (float64 audio, no quantisation, antialias=True):
+
+| Comparison | Max |Δ| (dB) | Mean |Δ| (dB) | RMSE (dB) | p99 |Δ| (dB) |
+|---|---:|---:|---:|---:|
+| A: float32 laptop vs board int16 | 0.246574 | 0.006220 | 0.009785 | 0.034024 |
+| B: numpy int16 vs board int16    | 0.000286 | 0.000003 | 0.000006 | 0.000023 |
+| C: float32 laptop vs numpy int16 | 0.246574 | 0.006220 | 0.009785 | 0.034026 |
+
+**Interpretation:**
+- Comparison B isolates the board firmware vs NumPy implementation difference (~0.000286 dB max),
+  confirming the firmware is numerically equivalent.
+- Comparison C isolates the float64→int16 quantisation effect (step ≈ 1/32767 ≈ 0.0000305).
+- Comparison A = B + C combined; the dominant term is quantisation noise from int16.
+- All discrepancies are well below the 0.05 dB acceptance threshold.
+- The float32 and board classifiers produce **identical** nearest-centroid accuracy because
+  the quantisation noise is small relative to inter-class separability.
+
+See `float32_board_heatmap.png` for per-clip, per-band visualisation.

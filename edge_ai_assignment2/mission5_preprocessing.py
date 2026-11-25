@@ -360,21 +360,26 @@ Laptop features computed from raw `float64` audio (no quantisation) vs board fea
 
 ### C2: Board vs NumPy on identical quantized samples (implementation discrepancy)
 Both pipelines receive exactly the same int16 samples. Any difference is pure numerical implementation
-(fixed-point vs double-precision FFT, Hann window coefficients, mel filter rounding).
+(float32 Radix-2 FFT on board vs double-precision NumPy FFT, Hann window coefficients, mel filter rounding).
 - Max |Δ| = **0.000286 dB** — below any perceptible threshold and well under the 0.05 dB limit.
 - Same-domain and cross-domain accuracies are **identical** (79.17%), confirming the implementation
   discrepancy is harmless for this classifier.
 
 ### C3: int8 S=1 vs int16 baseline
-int8 with scale=1.0 clips all samples with |amplitude| > 1/256 ≈ 0.004 (most speech samples).
-- Same-domain accuracy reflects the severely distorted features.
-- Cross-domain (i8 train → board i16 test): tests whether a classifier trained on harshly clipped
-  audio can transfer to the board's int16 features.
+int8 with scale=1.0: quantisation step = 1/127 ≈ 0.007874, nominal range ±1.0.
+Most speech samples span ±0.1 to ±0.9, so clipping is rare; the dominant effect is 48 dB lower SQNR
+compared to int16 (1/32767 ≈ 0.0000305 step).
+- Same-domain accuracy reflects the severely degraded signal-to-quantisation-noise ratio.
+- Cross-domain (i8 train → board i16 test): tests whether a classifier trained on int8 audio
+  can transfer to the board's int16 features.
 
 ### C4: int8 S=0.25 vs int16 baseline
-Scale=0.25 uses only 25% of the int8 dynamic range, reducing effective resolution to 6 bits.
-- Silence frames benefit from finer resolution at low amplitude.
-- Loud speech frames clip at |amplitude| > 0.004, introducing more severe distortion than int16.
+int8 with scale=0.25: quantisation step = 0.25/127 ≈ 0.001969, nominal range ±0.25.
+Samples with |amplitude| > 0.25 are hard-clipped; loud speech (most frames) is severely distorted.
+Finer step within ±0.25 benefits quiet signal segments but clipping dominates for speech.
+- This is *not* a "6-bit reduction" — it is still 8-bit resolution over a narrower ±0.25 window.
+- Smaller scale = finer quantisation steps over a narrower linear range (not fewer bits).
+- The clipping distortion makes features unrepresentative of the original speech content.
 
 ### C5: 8 kHz without antialias vs 8 kHz with antialias
 Lower sampling rate reduces data rate by 2× but introduces aliasing without the anti-aliasing filter.
@@ -396,8 +401,12 @@ Lower sampling rate reduces data rate by 2× but introduces aliasing without the
 - **SQNR:** 76.94 dB (int16) vs ~26 dB (int8 S=1) or ~20 dB (int8 S=0.25) — int16 is far superior.
 - **Accuracy:** int16 achieves 79.17% (same and cross-domain identical). int8 and 8 kHz configurations
   show reduced same-domain accuracy and increased cross-domain sensitivity.
-- **Aliasing risk:** 8 kHz without antialias corrupts high mel bands; with antialias=True the
-  performance is acceptable but always inferior to 16 kHz (double the frequency resolution).
+- **Aliasing risk:** 8 kHz without antialias corrupts high mel bands due to aliased frequencies
+  folding into the filterbank. With antialias=True performance improves, but 16 kHz int16 provides
+  broader bandwidth coverage (0–8 kHz vs 0–4 kHz) — not "double the frequency resolution" per se,
+  but meaningfully wider spectral content captured at the same NFFT/window ratio.
+- **Aliasing ≠ quantisation error:** aliasing distorts frequency content by folding; quantisation
+  adds uniform broadband noise proportional to the step size. These are independent effects.
 - **Cross-domain stability:** The 0.000286 dB board-vs-numpy discrepancy at 16 kHz int16 produces
   **zero cross-domain accuracy drop**, making the board features perfectly interchangeable with
   NumPy features for this classifier.

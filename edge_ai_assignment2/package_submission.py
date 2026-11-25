@@ -193,7 +193,6 @@ def clean_pycache():
 
 
 def build_package_and_zip():
-    (ROOT / "INSTALL.md").write_text("pip install numpy pyserial matplotlib\n", encoding="utf-8")
     if PKG.exists():
         shutil.rmtree(PKG)
     PKG.mkdir(parents=True)
@@ -203,8 +202,10 @@ def build_package_and_zip():
         "mission3_speed_sweep.py", "mission4_loss_dataset.py", "mission4_audit.py",
         "test_mission4_loss_handling.py",
         "mission5_domain_shift.py", "mission5_preprocessing.py", "mission5_board_experiments.py",
+        "mission5_float32_analysis.py",
         "demo_live.py", "board_link.py", "team_audio.py", "TEAMS.csv",
-        "speech_pool.npz", "README.md", "INSTALL.md", "team_02_module2_report.pdf",
+        "speech_pool.npz", "README.md", "INSTALL.md", "requirements.txt",
+        "team_02_module2_report.pdf",
     ]
     for f in files_to_copy:
         shutil.copy2(ROOT / f, PKG / f)
@@ -220,25 +221,76 @@ def build_package_and_zip():
                 zf.write(p, p.relative_to(ROOT))
     print(f"Saved {ZIP_PATH} ({ZIP_PATH.stat().st_size:,} bytes)")
 
-    # Verify extraction
+    # Strengthened ZIP verification
+    import hashlib
+    import subprocess
     tmp_dir = ROOT / "_verify_zip_tmp"
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
     with zipfile.ZipFile(ZIP_PATH, "r") as zf:
+        bad = zf.testzip()
+        assert bad is None, f"ZIP CRC error in member: {bad}"
+        names = zf.namelist()
+        assert not any("__pycache__" in n or n.endswith(".pyc") for n in names), \
+            "ZIP contains __pycache__ or .pyc files"
         zf.extractall(tmp_dir)
-    for req in [
+
+    mandatory = [
         "team_02_module2/mission1_pipe.py",
+        "team_02_module2/mission2_sampling_storage.py",
+        "team_02_module2/mission3_features.py",
+        "team_02_module2/mission3_speed_sweep.py",
+        "team_02_module2/mission4_loss_dataset.py",
+        "team_02_module2/mission4_audit.py",
+        "team_02_module2/test_mission4_loss_handling.py",
+        "team_02_module2/mission5_domain_shift.py",
+        "team_02_module2/mission5_preprocessing.py",
+        "team_02_module2/mission5_board_experiments.py",
+        "team_02_module2/mission5_float32_analysis.py",
         "team_02_module2/demo_live.py",
+        "team_02_module2/board_link.py",
+        "team_02_module2/team_audio.py",
         "team_02_module2/speech_pool.npz",
         "team_02_module2/README.md",
         "team_02_module2/INSTALL.md",
+        "team_02_module2/requirements.txt",
         "team_02_module2/team_02_module2_report.pdf",
+        "team_02_module2/doorbell_board_starter/doorbell_board_starter.ino",
+        "team_02_module2/doorbell_board_starter/features.h",
+        "team_02_module2/doorbell_board_starter/partitions.csv",
         "team_02_module2/results/mission4/dataset_board.npz",
+        "team_02_module2/results/mission4/dataset_numpy.npz",
         "team_02_module2/results/demo_live_report.json",
-    ]:
+        "team_02_module2/results/mission5/float32_board_discrepancy.csv",
+    ]
+    for req in mandatory:
         assert (tmp_dir / req).exists(), f"Missing in ZIP: {req}"
+
+    # Hash comparison for key source files
+    for f in ["INSTALL.md", "requirements.txt", "mission4_loss_dataset.py", "team_02_module2_report.pdf"]:
+        h_src = hashlib.sha256((ROOT / f).read_bytes()).hexdigest()
+        h_zip = hashlib.sha256((tmp_dir / "team_02_module2" / f).read_bytes()).hexdigest()
+        assert h_src == h_zip, f"Hash mismatch for {f}"
+
+    # Validate both NPZ datasets from extracted ZIP
+    import numpy as np
+    for npz_rel in ["results/mission4/dataset_board.npz", "results/mission4/dataset_numpy.npz"]:
+        with np.load(tmp_dir / "team_02_module2" / npz_rel, allow_pickle=False) as d:
+            assert d["X"].shape == (144, 49, 40), f"{npz_rel} X shape: {d['X'].shape}"
+            assert d["first_sample"].shape == (144, 49)
+            assert d["frame_numbers"].shape == (144, 49)
+            assert np.isfinite(d["X"]).all()
+
+    # Run offline pytest from extracted directory
+    res = subprocess.run(
+        ["python", "-m", "pytest", "test_mission4_loss_handling.py", "-q"],
+        cwd=str(tmp_dir / "team_02_module2"),
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, f"Extracted pytest failed:\n{res.stdout}\n{res.stderr}"
+
     shutil.rmtree(tmp_dir)
-    print("ZIP extraction verification PASSED.")
+    print("ZIP extraction, hash, NPZ, and offline pytest verification PASSED.")
 
 
 if __name__ == "__main__":
