@@ -348,106 +348,111 @@ def test_19_incomplete_stream_detected():
 # T20 (TEST F): Production integration — both entry points use shared impl
 # ---------------------------------------------------------------------------
 def test_20_production_integration_shared_implementation(tmp_path):
-    """Invoke _shared_dataset_workflow (used by both production entry points)
-    with mocked board and verify:
-    1. The shared loss-aware function (build_loss_aware_dataset) is called.
-    2. The shared NPZ writer (save_dataset_npz) is called.
-    3. Both datasets are generated in an initially empty directory.
-    4. All required metadata fields are preserved.
+    """Invoke BOTH actual production entry points:
+      - mission4_loss_dataset.build_and_validate_datasets()
+      - mission4_audit.rebuild_datasets_with_metadata()
+    with mocked Board hardware and temporary directories, and verify:
+    1. Both call build_loss_aware_dataset() and save_dataset_npz().
+    2. Both generate dataset_board.npz and dataset_numpy.npz in an initially empty directory.
+    3. All required metadata fields are preserved.
+    4. Missing required metadata in mocked Board.stream() is rejected (no fallback defaults).
     """
-    n_clips = 4
-    total_samples = n_clips * FS  # e.g. 4 s
-    frames_total = (total_samples - WIN) // HOP + 1
+    import mission4_loss_dataset as m4ld
+    import mission4_audit as m4a
+    from mission2_sampling_storage import quantise
+    from mission3_features import features as np_features
+    from team_audio import clip_list as real_clip_list, get_clip as real_get_clip
 
-    # Build ALL frames (including boundary-crossing ones) so the workflow
-    # can count boundary frames correctly
+    clips = real_clip_list(2)
+    x_all = np.concatenate([real_get_clip(2, cid, fs=FS, antialias=True) for cid, _ in clips])
+    _, xhat_all, _ = quantise(x_all, fmt="i16", scale=1.0)
+    ref_all = np_features(xhat_all, fs=FS, win=WIN, hop=HOP, nfft=m4ld.NFFT, mels=MELS, mfcc=0)
+
+    total_samples = len(x_all)
+    frames_total = len(ref_all)
+    packets_expected = (total_samples + SPP - 1) // SPP
     fnums_all = np.arange(frames_total, dtype=np.int64)
     fsamp_all = fnums_all * HOP
-    got_feat = np.ones((frames_total, MELS), dtype=np.float32) * 0.5
 
-    packets_expected = (total_samples + SPP - 1) // SPP
-    brd = {
-        "bad_crc": 0,
-        "seq_gaps": 0,
-        "uart_errors": 0,
-        "samples": total_samples,
-        "frames_ok": packets_expected + 1,
-    }
-    r_meta = {
-        "bad_crc_back": 0,
+    mock_stream_result = {
+        "features": ref_all.astype(np.float32),
+        "first_sample": fsamp_all,
+        "frame_numbers": fnums_all,
         "expected_features": frames_total,
-        "packets_sent": (total_samples + SPP - 1) // SPP,
         "lost_features": 0,
+        "bad_crc_back": 0,
+        "packets_sent": packets_expected,
+        "board": {
+            "bad_crc": 0,
+            "seq_gaps": 0,
+            "uart_errors": 0,
+            "samples": total_samples,
+            "frames_ok": packets_expected + 1,
+        },
     }
-    clips = [(c * 24, CLASSES[c % len(CLASSES)]) for c in range(n_clips)]
 
-    # Provide reference features (simple identity)
-    ref_all = np.ones((frames_total, MELS), dtype=np.float32) * 0.5
+    mock_board = MagicMock()
+    mock_board.stream.return_value = mock_stream_result
 
-    def mock_board_stream_fn():
-        return got_feat, fsamp_all, fnums_all, brd, r_meta, total_samples
+    for entry_name, entry_fn in [
+        ("build_and_validate_datasets", m4ld.build_and_validate_datasets),
+        ("rebuild_datasets_with_metadata", m4a.rebuild_datasets_with_metadata),
+    ]:
+        sub_dir = tmp_path / entry_name
+        sub_dir.mkdir()
+        orig_ld_out = m4ld.OUT_DIR
+        orig_a_out = m4a.OUT_DIR
+        bla_calls = []
+        save_calls = []
+        orig_bla = m4ld.build_loss_aware_dataset
+        orig_save = m4ld.save_dataset_npz
 
-    def mock_ref_features_fn(expected_samples):
-        return ref_all
+        def tracked_bla(*args, **kwargs):
+            bla_calls.append(True)
+            return orig_bla(*args, **kwargs)
 
-    # Track calls by wrapping the actual functions
-    import mission4_loss_dataset as m4ld
-    original_bla = m4ld.build_loss_aware_dataset
-    original_save = m4ld.save_dataset_npz
+        def tracked_save(*args, **kwargs):
+            save_calls.append(True)
+            return orig_save(*args, **kwargs)
 
-    bla_calls = []
-    save_calls = []
+        try:
+            m4ld.OUT_DIR = sub_dir
+            m4a.OUT_DIR = sub_dir
+            m4ld.build_loss_aware_dataset = tracked_bla
+            m4ld.save_dataset_npz = tracked_save
+            with patch.object(m4ld, "Board", return_value=mock_board), \
+                 patch.object(m4a, "Board", return_value=mock_board):
+                stats = entry_fn()
+        finally:
+            m4ld.OUT_DIR = orig_ld_out
+            m4a.OUT_DIR = orig_a_out
+            m4ld.build_loss_aware_dataset = orig_bla
+            m4ld.save_dataset_npz = orig_save
 
-    def tracked_bla(*args, **kwargs):
-        bla_calls.append(True)
-        return original_bla(*args, **kwargs)
+        assert len(bla_calls) >= 1, f"{entry_name}: build_loss_aware_dataset not called"
+        assert len(save_calls) >= 2, f"{entry_name}: save_dataset_npz called {len(save_calls)} times"
+        assert (sub_dir / "dataset_board.npz").exists()
+        assert (sub_dir / "dataset_numpy.npz").exists()
+        assert (sub_dir / "dataset_validation.json").exists()
+        with np.load(sub_dir / "dataset_board.npz", allow_pickle=False) as db:
+            required = {"X", "y", "clip_ids", "classes", "first_sample", "frame_numbers",
+                        "fs", "win", "hop", "nfft", "mels", "fmt", "scale"}
+            assert required.issubset(set(db.keys()))
+            assert db["X"].shape == (144, 49, MELS)
+            assert db["first_sample"].shape == (144, 49)
+            assert db["frame_numbers"].shape == (144, 49)
 
-    def tracked_save(*args, **kwargs):
-        save_calls.append(True)
-        return original_save(*args, **kwargs)
-
-    # Monkeypatch at the module level so _shared_dataset_workflow sees the tracked versions
-    old_bla = m4ld.build_loss_aware_dataset
-    old_save = m4ld.save_dataset_npz
-    try:
-        m4ld.build_loss_aware_dataset = tracked_bla
-        m4ld.save_dataset_npz = tracked_save
-        stats = m4ld._shared_dataset_workflow(
-            clips, tmp_path, mock_board_stream_fn, mock_ref_features_fn,
-            existing_comparison=False,
-        )
-    finally:
-        m4ld.build_loss_aware_dataset = old_bla
-        m4ld.save_dataset_npz = old_save
-
-    # Verify shared functions were called
-    assert len(bla_calls) >= 1, "build_loss_aware_dataset was not called"
-    assert len(save_calls) >= 2, f"save_dataset_npz called {len(save_calls)} times, expected >= 2"
-
-    # Verify datasets were generated in the directory
-    board_path = tmp_path / "dataset_board.npz"
-    numpy_path = tmp_path / "dataset_numpy.npz"
-    assert board_path.exists(), "dataset_board.npz not created"
-    assert numpy_path.exists(), "dataset_numpy.npz not created"
-
-    # Verify metadata fields
-    with np.load(board_path, allow_pickle=False) as db:
-        required = {"X", "y", "clip_ids", "classes", "first_sample", "frame_numbers",
-                     "fs", "win", "hop", "nfft", "mels", "fmt", "scale"}
-        assert required.issubset(set(db.keys())), f"Missing keys: {required - set(db.keys())}"
-        assert db["X"].shape == (n_clips, 49, MELS)
-        assert db["first_sample"].shape == (n_clips, 49)
-        assert db["frame_numbers"].shape == (n_clips, 49)
-
-    with np.load(numpy_path, allow_pickle=False) as dn:
-        assert required.issubset(set(dn.keys()))
-
-    # Verify validation JSON was written
-    validation_json = tmp_path / "dataset_validation.json"
-    assert validation_json.exists()
-    val_data = json.loads(validation_json.read_text())
-    assert "total_frames" in val_data
-    assert "max_diff_db" in val_data
+    # Verify missing required metadata is rejected without fallback defaults
+    bad_result = dict(mock_stream_result)
+    del bad_result["bad_crc_back"]
+    mock_board_bad = MagicMock()
+    mock_board_bad.stream.return_value = bad_result
+    with patch.object(m4ld, "Board", return_value=mock_board_bad):
+        with pytest.raises(ValueError, match="missing required return-path metadata"):
+            m4ld.build_and_validate_datasets()
+    with patch.object(m4a, "Board", return_value=mock_board_bad):
+        with pytest.raises(ValueError, match="missing required return-path metadata"):
+            m4a.rebuild_datasets_with_metadata()
 
 
 # ---------------------------------------------------------------------------

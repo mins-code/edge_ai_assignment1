@@ -209,17 +209,13 @@ def rebuild_datasets_with_metadata():
                          speed=1.0, samples_per_packet=SPP)
         finally:
             b.close()
-        brd = r["board"] or {}
+        brd = r["board"]
+        if not isinstance(brd, dict):
+            raise RuntimeError("Integrity: missing board summary metadata (r['board'] is None)")
         got_feat = r["features"]
         fsamp_raw = np.asarray(r["first_sample"], dtype=np.int64)
         fnums_raw = np.asarray(r["frame_numbers"], dtype=np.int64)
-        bcb = r.get("bad_crc_back", 0)
-        r_meta = {
-            "expected_features": r.get("expected_features", 7199),
-            "bad_crc_back": bcb,
-            "packets_sent": r.get("packets_sent", 0),
-            "lost_features": r.get("lost_features", 0),
-        }
+        r_meta = {k: r[k] for k in ("expected_features", "bad_crc_back", "packets_sent", "lost_features") if k in r}
         return got_feat, fsamp_raw, fnums_raw, brd, r_meta, len(x_all)
 
     def ref_features_fn(expected_samples):

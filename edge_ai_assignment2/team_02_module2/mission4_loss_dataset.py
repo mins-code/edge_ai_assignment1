@@ -505,7 +505,7 @@ def _shared_dataset_workflow(clips, out_dir: Path, board_stream_fn, ref_features
     db.close()
     dn.close()
 
-    recv_samples = brd.get("samples", 0)
+    recv_samples = brd["samples"]
     stats = {
         "total_frames": len(got_feat),
         "boundary_frames_excluded": boundary_count,
@@ -513,14 +513,14 @@ def _shared_dataset_workflow(clips, out_dir: Path, board_stream_fn, ref_features
         "X_shape": list(X_board.shape),
         "y_shape": list(y.shape),
         "max_diff_db": round(max_diff, 6),
-        "bad_crc": brd.get("bad_crc", 0),
-        "seq_gaps": brd.get("seq_gaps", 0),
-        "packets_sent": r_meta.get("packets_sent", 0),
-        "frames_ok": brd.get("frames_ok", 0),
+        "bad_crc": brd["bad_crc"],
+        "seq_gaps": brd["seq_gaps"],
+        "packets_sent": r_meta["packets_sent"],
+        "frames_ok": brd["frames_ok"],
         "samples_received": recv_samples,
         "received_features": len(got_feat),
-        "lost_features": r_meta.get("lost_features", 0),
-        "bad_crc_back": r_meta.get("bad_crc_back", 0),
+        "lost_features": r_meta["lost_features"],
+        "bad_crc_back": r_meta["bad_crc_back"],
     }
     (out_dir / "dataset_validation.json").write_text(json.dumps(stats, indent=2))
     print("=== Dataset Validation ===", stats)
@@ -546,16 +546,13 @@ def build_and_validate_datasets() -> dict:
                          speed=1.0, samples_per_packet=SPP)
         finally:
             b.close()
-        brd = r["board"] or {}
+        brd = r["board"]
+        if not isinstance(brd, dict):
+            raise RuntimeError("Integrity: missing board summary metadata (r['board'] is None)")
         got_feat = r["features"]
         fsamp_raw = np.asarray(r["first_sample"], dtype=np.int64)
         fnums_raw = np.asarray(r["frame_numbers"], dtype=np.int64)
-        r_meta = {
-            "expected_features": r.get("expected_features", 7199),
-            "bad_crc_back": r.get("bad_crc_back", 0),
-            "packets_sent": r.get("packets_sent", 0),
-            "lost_features": r.get("lost_features", 0),
-        }
+        r_meta = {k: r[k] for k in ("expected_features", "bad_crc_back", "packets_sent", "lost_features") if k in r}
         return got_feat, fsamp_raw, fnums_raw, brd, r_meta, len(x_all)
 
     def ref_features_fn(expected_samples):
