@@ -19,6 +19,11 @@ from board_link import Board
 from team_audio import CLASSES, clip_list, get_clip
 from mission2_sampling_storage import quantise, pack
 from mission3_features import features
+from mission4_loss_dataset import (
+    build_loss_aware_dataset,
+    save_dataset_npz,
+    _shared_dataset_workflow,
+)
 
 TEAM = 2
 COM_PORT = "COM5"
@@ -183,116 +188,50 @@ def rebuild_loss_experiments_with_bad_crc_back():
 def rebuild_datasets_with_metadata():
     """
     Re-stream all 144 clips; save first_sample and frame_numbers in dataset NPZs.
-    X, y, classes, clip_ids are UNCHANGED (same values as before).
+    Delegates to the shared _shared_dataset_workflow() from mission4_loss_dataset.py
+    so that both production entry points use the same:
+      - build_loss_aware_dataset() for loss-aware validation
+      - save_dataset_npz() for atomic dataset writing
+    
+    Works even when previous NPZ files do not exist.
     """
     print("\n=== Task 3: Rebuild Datasets with first_sample + frame_numbers ===")
     clips = clip_list(TEAM)
     x_all = np.concatenate([get_clip(TEAM, cid, fs=FS, antialias=True) for cid, _ in clips])
     _, xhat_all, _ = quantise(x_all, fmt="i16", scale=1.0)
     pl_all = pack(x_all, fmt="i16", scale=1.0)
-    ref_all = features(xhat_all, fs=FS, win=WIN, hop=HOP, nfft=NFFT, mels=MELS, mfcc=0)
 
-    b = Board(COM_PORT, baud=BAUD)
-    try:
-        r = b.stream(pl_all, fs=FS, fmt="i16", scale=1.0, win=WIN, hop=HOP,
-                     nfft=NFFT, mels=MELS, mfcc=0, feat=True, store="none",
-                     speed=1.0, samples_per_packet=SPP)
-    finally:
-        b.close()
+    def board_stream_fn():
+        b = Board(COM_PORT, baud=BAUD)
+        try:
+            r = b.stream(pl_all, fs=FS, fmt="i16", scale=1.0, win=WIN, hop=HOP,
+                         nfft=NFFT, mels=MELS, mfcc=0, feat=True, store="none",
+                         speed=1.0, samples_per_packet=SPP)
+        finally:
+            b.close()
+        brd = r["board"] or {}
+        got_feat = r["features"]
+        fsamp_raw = np.asarray(r["first_sample"], dtype=np.int64)
+        fnums_raw = np.asarray(r["frame_numbers"], dtype=np.int64)
+        bcb = r.get("bad_crc_back", 0)
+        r_meta = {
+            "expected_features": r.get("expected_features", 7199),
+            "bad_crc_back": bcb,
+            "packets_sent": r.get("packets_sent", 0),
+            "lost_features": r.get("lost_features", 0),
+        }
+        return got_feat, fsamp_raw, fnums_raw, brd, r_meta, len(x_all)
 
-    brd = r["board"] or {}
-    got_feat = r["features"]
-    fsamp = np.asarray(r["first_sample"], dtype=np.int64)
-    fnums = np.asarray(r["frame_numbers"], dtype=np.int64)
-    bcb = r.get("bad_crc_back", 0)
+    def ref_features_fn(expected_samples):
+        return features(xhat_all, fs=FS, win=WIN, hop=HOP, nfft=NFFT, mels=MELS, mfcc=0)
 
-    # Integrity assertions
-    assert brd.get("samples", 0) == len(x_all), f"Sample mismatch: {brd.get('samples')} != {len(x_all)}"
-    assert len(got_feat) == 7199, f"Expected 7199 frames, got {len(got_feat)}"
-    assert brd.get("bad_crc", 0) == 0 and brd.get("seq_gaps", 0) == 0 and brd.get("uart_errors", 0) == 0
-    assert bcb == 0, f"bad_crc_back={bcb} (unexpected return-path corruption)"
-
-    # Build clean datasets (same logic as before) + accumulate per-slot metadata
-    X_board = np.zeros((144, 49, MELS), dtype=np.float32)
-    X_numpy = np.zeros((144, 49, MELS), dtype=np.float32)
-    occupied = np.zeros((144, 49), dtype=bool)
-    # Store per-slot first_sample and frame_number for dataset NPZ
-    fs_dataset = np.zeros((144, 49), dtype=np.int64)   # original first_sample per slot
-    fn_dataset = np.zeros((144, 49), dtype=np.int64)   # frame_number per slot
-    y = np.array([CLASSES.index(lab) for _, lab in clips], dtype=np.int64)
-    clip_ids = np.array([cid for cid, _ in clips], dtype=np.int64)
-    boundary_count = 0
-    seen_frames = set()
-
-    for i, (fn, s0) in enumerate(zip(fnums, fsamp)):
-        assert int(fn) not in seen_frames, f"Duplicate frame {fn}"
-        seen_frames.add(int(fn))
-        assert int(s0) == int(fn) * HOP, f"Offset mismatch: {s0} != {fn * HOP}"
-        c_start = int(s0 // FS)
-        c_end = int((s0 + WIN - 1) // FS)
-        if c_start != c_end:
-            boundary_count += 1
-            continue
-        frame_in_clip = int((s0 % FS) // HOP)
-        occupied[c_start, frame_in_clip] = True
-        X_board[c_start, frame_in_clip] = got_feat[i]
-        X_numpy[c_start, frame_in_clip] = ref_all[fn]
-        fs_dataset[c_start, frame_in_clip] = int(s0)
-        fn_dataset[c_start, frame_in_clip] = int(fn)
-
-    assert occupied.all(), "Unpopulated zero-filled feature slots remain"
-    assert boundary_count == 143, f"Expected 143 boundary frames, got {boundary_count}"
-    assert np.isfinite(X_board).all() and np.isfinite(X_numpy).all()
-    max_diff = float(np.max(np.abs(X_board - X_numpy)))
-    assert max_diff <= 0.05, f"Max diff {max_diff} > 0.05 dB"
-
-    # Verify unchanged X, y relative to old datasets
-    old_b = np.load(OUT_DIR / "dataset_board.npz")
-    old_n = np.load(OUT_DIR / "dataset_numpy.npz")
-    assert np.allclose(X_board, old_b["X"], atol=1e-5), "X_board changed unexpectedly!"
-    assert np.allclose(X_numpy, old_n["X"], atol=1e-5), "X_numpy changed unexpectedly!"
-    print("  Verified: X, y unchanged from previous dataset build.")
-
-    # Save updated NPZ files with first_sample and frame_numbers metadata
-    np.savez_compressed(
-        OUT_DIR / "dataset_board.npz",
-        X=X_board, y=y, clip_ids=clip_ids, classes=np.array(CLASSES),
-        first_sample=fs_dataset, frame_numbers=fn_dataset,
-        fs=FS, win=WIN, hop=HOP, nfft=NFFT, mels=MELS, fmt="i16", scale=1.0,
+    stats = _shared_dataset_workflow(
+        clips, OUT_DIR, board_stream_fn, ref_features_fn,
+        existing_comparison=True,
     )
-    np.savez_compressed(
-        OUT_DIR / "dataset_numpy.npz",
-        X=X_numpy, y=y, clip_ids=clip_ids, classes=np.array(CLASSES),
-        first_sample=fs_dataset, frame_numbers=fn_dataset,
-        fs=FS, win=WIN, hop=HOP, nfft=NFFT, mels=MELS, fmt="i16", scale=1.0,
-    )
-
-    # Verify reload
-    db2 = np.load(OUT_DIR / "dataset_board.npz")
-    dn2 = np.load(OUT_DIR / "dataset_numpy.npz")
-    assert db2["X"].shape == (144, 49, 40) and dn2["X"].shape == (144, 49, 40)
-    assert "first_sample" in db2 and "frame_numbers" in db2
-    assert db2["first_sample"].shape == (144, 49)
     print(f"  Saved updated dataset_board.npz and dataset_numpy.npz with first_sample, frame_numbers")
-    print(f"  bad_crc_back={bcb}  max_diff_db={max_diff:.6f}")
-
-    return {
-        "total_frames": len(got_feat),
-        "boundary_frames_excluded": boundary_count,
-        "clean_frames": int(X_board.shape[0] * X_board.shape[1]),
-        "X_shape": list(X_board.shape),
-        "y_shape": list(y.shape),
-        "max_diff_db": round(max_diff, 6),
-        "bad_crc": brd.get("bad_crc", 0),
-        "bad_crc_back": bcb,
-        "seq_gaps": brd.get("seq_gaps", 0),
-        "packets_sent": r["packets_sent"],
-        "frames_ok": brd.get("frames_ok", 0),
-        "samples_received": brd.get("samples", 0),
-        "expected_features": r["expected_features"],
-        "received_features": len(got_feat),
-        "lost_features": r["lost_features"],
-    }
+    print(f"  bad_crc_back={stats['bad_crc_back']}  max_diff_db={stats['max_diff_db']:.6f}")
+    return stats
 
 
 def run_full_stream_skip_experiment() -> dict:
@@ -358,19 +297,27 @@ def verify_loss_accounting(dataset_stats: dict):
     print(f"  Boundary frames excluded from dataset: {dataset_stats['boundary_frames_excluded']}")
     print(f"  Clean within-clip frames in dataset: {dataset_stats['clean_frames']} (144×49)")
 
-    assert dataset_stats["received_features"] == 7199, \
-        f"Expected 7199 received features, got {dataset_stats['received_features']}"
-    assert dataset_stats["lost_features"] == 0, \
-        f"Expected 0 lost features, got {dataset_stats['lost_features']}"
-    assert dataset_stats["bad_crc"] == 0 and dataset_stats["seq_gaps"] == 0
-    assert dataset_stats["clean_frames"] == 144 * 49  # 7056
+    if dataset_stats["received_features"] != 7199:
+        raise RuntimeError(f"Expected 7199 received features, got {dataset_stats['received_features']}")
+    if dataset_stats["lost_features"] != 0:
+        raise RuntimeError(f"Expected 0 lost features, got {dataset_stats['lost_features']}")
+    if dataset_stats["bad_crc"] != 0 or dataset_stats["seq_gaps"] != 0:
+        raise RuntimeError("Unexpected corruption in clean stream")
+    if dataset_stats["clean_frames"] != 144 * 49:
+        raise RuntimeError(f"Expected {144*49} clean frames, got {dataset_stats['clean_frames']}")
     print("  All loss accounting assertions PASSED.")
 
 
 def update_summary(speed_rows, loss_rows, dataset_stats, full_skip_row):
-    """Append audit results to mission4 summary.md."""
+    """Write audit results to mission4 summary.md."""
     summary_path = OUT_DIR / "summary.md"
-    txt = summary_path.read_text(encoding="utf-8")
+    # Read the existing base summary (up to the first audit section)
+    if summary_path.exists():
+        txt = summary_path.read_text(encoding="utf-8")
+    else:
+        txt = "# Mission 4: Loss Accounting & Dataset Construction — Results (Team 02)\n"
+
+    # Find the marker for audit-added content and truncate
     marker = "## 3. Fastest Zero-Loss Streaming Speed"
     if marker in txt:
         txt = txt[:txt.index(marker)].rstrip() + "\n"
@@ -389,21 +336,48 @@ def update_summary(speed_rows, loss_rows, dataset_stats, full_skip_row):
         else:
             fastest[label] = None
 
+    ds_samples = dataset_stats.get('samples_received', 'N/A')
+    ds_samples_str = f"{ds_samples:,}" if isinstance(ds_samples, int) else str(ds_samples)
+    fs_samples = full_skip_row.get('samples_received', 'N/A')
+    fs_samples_str = f"{fs_samples:,}" if isinstance(fs_samples, int) else str(fs_samples)
     com5 = fastest.get("COM5_921600")
     com10 = fastest.get("COM10_115200")
-    com5_str = (f"req={com5['requested']}× eff={com5['effective']}× wire={com5['wire_bps']:.0f} B/s"
-                if com5 else "N/A")
-    com10_str = (f"req={com10['requested']}× eff={com10['effective']}× wire={com10['wire_bps']:.0f} B/s"
-                 if com10 else "N/A")
+
+    # Format speed table rows
+    if com5:
+        com5_row = f"| COM5, UART | {com5['requested']}× | {com5['effective']}× | {com5['wire_bps']:.1f} B/s |"
+    else:
+        com5_row = "| COM5, UART | N/A | N/A | N/A |"
+    if com10:
+        com10_row = f"| COM10, native USB | {com10['requested']}× | {com10['effective']}× | {com10['wire_bps']:.1f} B/s |"
+    else:
+        com10_row = "| COM10, native USB | N/A | N/A | N/A |"
 
     addendum = f"""
 ## 3. Fastest Zero-Loss Streaming Speed (`fastest_speed.csv`)
 
-Swept `requested_speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"` (requiring `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`, `samples_received==samples_expected`, and `packets_sent==packets_expected`):
-- **COM5 (921600 baud, UART):** Fastest zero-loss: **{com5_str}**
-- **COM10 (native USB, 115200 baud):** Fastest zero-loss: **{com10_str}**
-- `bad_crc_back` (return-path CRC failures) = 0 at all zero-loss speeds.
-- Note: COM5 effective speed is UART-limited (~89 kB/s wire regardless of requested speed ≥ 2.74×).
+Swept `requested_speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"`.
+Zero-loss requires `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`,
+`samples_received==samples_expected`, and `packets_sent==packets_expected`.
+
+| Interface | Requested speed | Effective speed | Wire throughput |
+|---|---:|---:|---:|
+{com5_row}
+{com10_row}
+
+**Interpretation:**
+- These Mission 4 measurements were taken with `feat=False` (no feature computation on board).
+- **Requested speed is not the same as effective delivered speed.** The requested speed sets the
+  pacing timer; effective speed is `audio_duration / elapsed_wall_time`.
+- **COM5** is constrained by its UART physical bandwidth: at 921,600 baud with 10 bits/byte,
+  the theoretical ceiling is 92,160 B/s. Serial backpressure prevents the requested 32× rate
+  from being achieved — the effective speed plateaus at ~2.74×.
+- **COM10** (native USB) achieves higher throughput but encounters receive-buffer overflow at
+  requested speeds of 8× and above, causing CRC errors and sequence gaps.
+- Mission 3 and Mission 4 measurements may differ because of experimental settings (feat on/off)
+  and timing definitions (Mission 3 uses `send_seconds`; Mission 4 uses wall-clock `elapsed_s`).
+
+`bad_crc_back` (return-path CRC failures) = 0 at all zero-loss speeds.
 
 ## 4. Full 144-Clip Loss Accounting (Verified)
 
@@ -414,7 +388,7 @@ Swept `requested_speed` from 0.5× to 32× on both USB interfaces with `feat=Fal
 | Packets sent | {dataset_stats.get('packets_sent', 'N/A')} | {full_skip_row.get('packets_sent', 'N/A')} |
 | `board["frames_ok"]` | {dataset_stats.get('frames_ok', 'N/A')} *(incl. EOS)* | {full_skip_row.get('frames_ok', 'N/A')} *(incl. EOS)* |
 | Samples expected | 2,304,000 | 2,304,000 |
-| Samples received | {dataset_stats.get('samples_received', 'N/A'):,} | {full_skip_row.get('samples_received', 'N/A'):,} |
+| Samples received | {ds_samples_str} | {fs_samples_str} |
 | Expected feature frames | 7,199 | 7,199 |
 | Received feature frames | {dataset_stats.get('received_features', 'N/A')} | {full_skip_row.get('received_features', 'N/A')} |
 | Lost feature frames | {dataset_stats.get('lost_features', 0)} | {full_skip_row.get('lost_features', 'N/A')} |
@@ -425,13 +399,32 @@ Swept `requested_speed` from 0.5× to 32× on both USB interfaces with `feat=Fal
 | Boundary-crossing frames excluded | 143 | — |
 | Clean within-clip frames in dataset | 7,056 (144 × 49) | — |
 
-## 5. Dataset Metadata Update (`dataset_board.npz`, `dataset_numpy.npz`)
+## 5. Fail-Closed Loss Handling
+
+Both `build_and_validate_datasets()` (in `mission4_loss_dataset.py`) and
+`rebuild_datasets_with_metadata()` (in `mission4_audit.py`) delegate to the same
+shared `_shared_dataset_workflow()` which calls:
+- `build_loss_aware_dataset()` for loss-aware validation and labelling.
+- `save_dataset_npz()` for atomic dataset writing with the canonical schema.
+
+For **clean streams** (skip_tuple=None), ALL of the following are rejected:
+nonzero bad_crc, bad_crc_back, uart_errors, seq_gaps; sample/feature count mismatches;
+duplicate frame numbers; NaN/Inf values; offset mismatches.
+
+For **controlled-loss streams** (explicit skip_tuple): the same corruption checks apply,
+plus validation of skip indices (unique, in range), expected sample/feature counts
+computed from the actual skipped packet lengths, and sequence-gap count verification.
+Timeline reconstruction and frame invalidation occur only after validation passes.
+
+Regression tests: `python -m pytest test_mission4_loss_handling.py -q`
+
+## 6. Dataset Metadata Update (`dataset_board.npz`, `dataset_numpy.npz`)
 Both NPZ files now contain additional arrays:
 - `first_sample`: shape `(144, 49)` — original `first_sample` offset for each stored feature frame.
 - `frame_numbers`: shape `(144, 49)` — global frame index for each stored feature frame.
 - `X`, `y`, `classes`, `clip_ids` are **bit-identical** to the previous dataset build.
 
-## 6. LLM Usage Update
+## 7. LLM Usage Update
 - Used LLM to implement `mission4_audit.py` for the speed sweep, `bad_crc_back` enrichment,
   full-stream `skip=(10,11,200)` experiment, dataset metadata addition, and 144-clip loss accounting verification.
 """

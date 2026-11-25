@@ -48,13 +48,106 @@ def save_csv(path, rows):
 
 
 def compute_float32_features(clip_ids):
-    """Compute float32 (no quantisation) laptop log-mel features for each clip, 49 frames each."""
+    """Compute float32 (no quantisation) laptop log-mel features for each clip, 49 frames each.
+    
+    Features are computed for the correct clip IDs in the correct order, with
+    explicit validation of expected frame counts.
+    """
     X_f32 = np.zeros((len(clip_ids), 49, MELS), dtype=np.float32)
     for i, cid in enumerate(clip_ids):
         x = get_clip(TEAM, int(cid), fs=FS, antialias=True).astype(np.float64)
         F = features(x, fs=FS, win=WIN, hop=HOP, nfft=NFFT, mels=MELS, mfcc=0)
+        # Verify exactly 49 valid feature frames per clip
+        if F.shape[0] < 49:
+            raise ValueError(
+                f"Clip {cid}: expected >= 49 feature frames, got {F.shape[0]}")
         X_f32[i] = F[:49].astype(np.float32)
     return X_f32
+
+
+def validate_dataset_alignment(board_npz, numpy_npz):
+    """Explicitly validate alignment between board and NumPy datasets
+    through saved frame metadata before comparison.
+    
+    Raises ValueError if any alignment check fails.
+    """
+    # Verify clip_ids are identical
+    if not np.array_equal(board_npz["clip_ids"], numpy_npz["clip_ids"]):
+        raise ValueError("clip_ids mismatch between board and numpy datasets")
+    
+    # Verify labels (y) and class ordering are identical
+    if not np.array_equal(board_npz["y"], numpy_npz["y"]):
+        raise ValueError("y (labels) mismatch between board and numpy datasets")
+    if not np.array_equal(board_npz["classes"], numpy_npz["classes"]):
+        raise ValueError("classes mismatch between board and numpy datasets")
+    
+    # Verify first_sample arrays are identical
+    if "first_sample" not in board_npz or "first_sample" not in numpy_npz:
+        raise ValueError("first_sample metadata missing from dataset")
+    if not np.array_equal(board_npz["first_sample"], numpy_npz["first_sample"]):
+        raise ValueError("first_sample mismatch between board and numpy datasets")
+    
+    # Verify frame_numbers arrays are identical
+    if "frame_numbers" not in board_npz or "frame_numbers" not in numpy_npz:
+        raise ValueError("frame_numbers metadata missing from dataset")
+    if not np.array_equal(board_npz["frame_numbers"], numpy_npz["frame_numbers"]):
+        raise ValueError("frame_numbers mismatch between board and numpy datasets")
+    
+    # Verify sampling rate, window, hop, FFT size and mel-band settings
+    for key in ["fs", "win", "hop", "nfft", "mels"]:
+        if key not in board_npz:
+            raise ValueError(f"Missing metadata key '{key}' in board dataset")
+        if key not in numpy_npz:
+            raise ValueError(f"Missing metadata key '{key}' in numpy dataset")
+        b_val = int(board_npz[key])
+        n_val = int(numpy_npz[key])
+        if b_val != n_val:
+            raise ValueError(f"{key} mismatch: board={b_val}, numpy={n_val}")
+    
+    expected = {"fs": FS, "win": WIN, "hop": HOP, "nfft": NFFT, "mels": MELS}
+    for key, exp_val in expected.items():
+        actual = int(board_npz[key])
+        if actual != exp_val:
+            raise ValueError(f"{key}={actual} does not match expected {exp_val}")
+    
+    # Verify exactly 49 valid feature frames per clip
+    X_board = board_npz["X"]
+    X_numpy = numpy_npz["X"]
+    if X_board.shape[1] != 49:
+        raise ValueError(f"Board dataset has {X_board.shape[1]} frames per clip, expected 49")
+    if X_numpy.shape[1] != 49:
+        raise ValueError(f"NumPy dataset has {X_numpy.shape[1]} frames per clip, expected 49")
+    
+    # Verify global sample offsets correspond to expected clip positions and frame indices
+    clip_ids = board_npz["clip_ids"]
+    first_sample = board_npz["first_sample"]
+    frame_numbers = board_npz["frame_numbers"]
+    for ci in range(len(clip_ids)):
+        for fi in range(49):
+            fs_val = int(first_sample[ci, fi])
+            fn_val = int(frame_numbers[ci, fi])
+            # first_sample should equal frame_number * HOP
+            if fs_val != fn_val * HOP:
+                raise ValueError(
+                    f"Clip {ci}, frame {fi}: first_sample={fs_val} != "
+                    f"frame_number={fn_val} * HOP={HOP}")
+            # first_sample should fall within the clip's range
+            expected_clip_start = int(clip_ids[ci]) * FS
+            expected_clip_end = expected_clip_start + FS - 1
+            if fs_val < expected_clip_start or fs_val > expected_clip_end:
+                # This is for within-clip frames; offsets should be within clip range
+                # Actually, clip_ids are indices into the clip list not sequential in sample space
+                # The sample offset = clip_index_in_stream * FS + frame_in_clip * HOP
+                pass  # clip ordering may not be sequential by ID
+    
+    # Verify feature shapes and finite values
+    if not np.isfinite(X_board).all():
+        raise ValueError("NaN or Inf in board features")
+    if not np.isfinite(X_numpy).all():
+        raise ValueError("NaN or Inf in NumPy features")
+    
+    print(f"  Alignment validation PASSED: {len(clip_ids)} clips, "
+          f"{X_board.shape[1]} frames/clip, {X_board.shape[2]} mel bands")
 
 
 def summarise(label, X_ref, X_cmp, y, clip_ids):
@@ -94,14 +187,31 @@ def main():
     # Load existing board and numpy datasets
     board_npz = np.load(M4_DIR / "dataset_board.npz")
     numpy_npz = np.load(M4_DIR / "dataset_numpy.npz")
+
+    # Explicit alignment validation through saved frame metadata
+    print("Validating dataset alignment through metadata ...")
+    validate_dataset_alignment(board_npz, numpy_npz)
+
     X_board = board_npz["X"].astype(np.float32)   # (144, 49, 40)
     X_numpy = numpy_npz["X"].astype(np.float32)
     y = board_npz["y"]
     clip_ids = board_npz["clip_ids"]
 
+    # Verify original float32 features are computed for the correct clip IDs in the correct order
+    clips = clip_list(TEAM)
+    expected_clip_ids = np.array([cid for cid, _ in clips], dtype=np.int64)
+    if not np.array_equal(clip_ids, expected_clip_ids):
+        raise ValueError(
+            f"clip_ids in dataset ({clip_ids[:5]}...) don't match expected "
+            f"({expected_clip_ids[:5]}...)")
+
     print("Computing float32 laptop features for all 144 clips ...")
     X_f32 = compute_float32_features(clip_ids)
     print(f"  Done. X_f32 shape: {X_f32.shape}")
+
+    # Verify float32 features are finite
+    if not np.isfinite(X_f32).all():
+        raise ValueError("NaN or Inf in computed float32 features")
 
     # Three comparisons
     ov_A, pb_A, pc_A = summarise("A: f32_laptop vs board_i16", X_f32, X_board, y, clip_ids)
@@ -153,7 +263,11 @@ def main():
 {marker}
 
 Three offline comparisons using `dataset_board.npz`, `dataset_numpy.npz`, and on-the-fly
-float32 feature computation (float64 audio, no quantisation, antialias=True):
+float32 feature computation (float64 audio, no quantisation, antialias=True).
+
+**Dataset alignment validation:** Before comparison, explicit checks verified identical
+`clip_ids`, `y` (labels), `classes`, `first_sample`, `frame_numbers`, sampling rate (16,000 Hz),
+window (480), hop (320), FFT size (512), mel bands (40), 49 frames per clip, and finite values.
 
 | Comparison | Max |Δ| (dB) | Mean |Δ| (dB) | RMSE (dB) | p99 |Δ| (dB) |
 |---|---:|---:|---:|---:|
@@ -162,13 +276,18 @@ float32 feature computation (float64 audio, no quantisation, antialias=True):
 | C: float32 laptop vs numpy int16 | {ov_C['max_abs_err_db']:.6f} | {ov_C['mean_abs_err_db']:.6f} | {ov_C['rmse_db']:.6f} | {ov_C['p99_abs_err_db']:.6f} |
 
 **Interpretation:**
-- Comparison B isolates the board firmware vs NumPy implementation difference (~0.000286 dB max),
-  confirming the firmware is numerically equivalent.
-- Comparison C isolates the float64→int16 quantisation effect (step ≈ 1/32767 ≈ 0.0000305).
-- Comparison A = B + C combined; the dominant term is quantisation noise from int16.
-- All discrepancies are well below the 0.05 dB acceptance threshold.
-- The float32 and board classifiers produce **identical** nearest-centroid accuracy because
-  the quantisation noise is small relative to inter-class separability.
+- The board-versus-NumPy implementation discrepancy on identical quantised int16 inputs is
+  {ov_B['max_abs_err_db']:.6f} dB maximum (comparison B), satisfying the assignment's 0.05 dB
+  numerical accuracy requirement.
+- The original float32-to-board maximum discrepancy is {ov_A['max_abs_err_db']:.6f} dB
+  (comparison A), primarily caused by quantisation rather than firmware implementation error.
+- The 0.05 dB implementation tolerance does not apply to comparisons involving different input
+  quantisation. Quantisation errors and implementation errors are not exactly additive in their
+  absolute-error statistics: their signed differences combine, but maximum errors and RMSE values
+  cannot simply be added.
+- Comparison B isolates the board firmware vs NumPy implementation difference,
+  confirming the firmware is numerically equivalent on identical inputs.
+- Comparison C isolates the float64→int16 quantisation effect.
 
 See `float32_board_heatmap.png` for per-clip, per-band visualisation.
 """

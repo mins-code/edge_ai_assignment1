@@ -64,7 +64,11 @@ Streamed all 144 clips on `COM5` (`921600` baud, `speed=1.0`) for each configura
 ## Float32-to-Board Discrepancy Analysis
 
 Three offline comparisons using `dataset_board.npz`, `dataset_numpy.npz`, and on-the-fly
-float32 feature computation (float64 audio, no quantisation, antialias=True):
+float32 feature computation (float64 audio, no quantisation, antialias=True).
+
+**Dataset alignment validation:** Before comparison, explicit checks verified identical
+`clip_ids`, `y` (labels), `classes`, `first_sample`, `frame_numbers`, sampling rate (16,000 Hz),
+window (480), hop (320), FFT size (512), mel bands (40), 49 frames per clip, and finite values.
 
 | Comparison | Max |Δ| (dB) | Mean |Δ| (dB) | RMSE (dB) | p99 |Δ| (dB) |
 |---|---:|---:|---:|---:|
@@ -73,12 +77,17 @@ float32 feature computation (float64 audio, no quantisation, antialias=True):
 | C: float32 laptop vs numpy int16 | 0.246574 | 0.006220 | 0.009785 | 0.034026 |
 
 **Interpretation:**
-- Comparison B isolates the board firmware vs NumPy implementation difference (~0.000286 dB max),
-  confirming the firmware is numerically equivalent.
-- Comparison C isolates the float64→int16 quantisation effect (step ≈ 1/32767 ≈ 0.0000305).
-- Comparison A = B + C combined; the dominant term is quantisation noise from int16.
-- All discrepancies are well below the 0.05 dB acceptance threshold.
-- The float32 and board classifiers produce **identical** nearest-centroid accuracy because
-  the quantisation noise is small relative to inter-class separability.
+- The board-versus-NumPy implementation discrepancy on identical quantised int16 inputs is
+  0.000286 dB maximum (comparison B), satisfying the assignment's 0.05 dB
+  numerical accuracy requirement.
+- The original float32-to-board maximum discrepancy is 0.246574 dB
+  (comparison A), primarily caused by quantisation rather than firmware implementation error.
+- The 0.05 dB implementation tolerance does not apply to comparisons involving different input
+  quantisation. Quantisation errors and implementation errors are not exactly additive in their
+  absolute-error statistics: their signed differences combine, but maximum errors and RMSE values
+  cannot simply be added.
+- Comparison B isolates the board firmware vs NumPy implementation difference,
+  confirming the firmware is numerically equivalent on identical inputs.
+- Comparison C isolates the float64→int16 quantisation effect.
 
 See `float32_board_heatmap.png` for per-clip, per-band visualisation.

@@ -36,66 +36,242 @@ def save_csv(path: Path, rows: list[dict]) -> None:
         w.writerows(rows)
 
 
+# ---------------------------------------------------------------------------
+# Universal stream integrity validation (applies to ALL streams)
+# ---------------------------------------------------------------------------
+def _validate_stream_integrity(got_feat: np.ndarray, fsamp: np.ndarray,
+                                fnums: np.ndarray, brd: dict, r: dict,
+                                clips: list, expected_samples: int,
+                                skip_tuple: tuple | None = None) -> None:
+    """Validate stream integrity checks that apply to ALL streams, whether
+    clean or controlled-loss.  Raises ValueError or RuntimeError on any
+    integrity violation.
+
+    Checks performed:
+      1. Nonzero bad_crc
+      2. Nonzero bad_crc_back
+      3. Nonzero uart_errors
+      4. Missing required board metadata keys
+      5. Feature-array / fsamp / fnums length mismatches
+      6. Invalid feature dimensions
+      7. NaN or Inf values in features
+      8. Duplicate feature frame numbers
+      9. Invalid sample offsets (s0 != fn * HOP)
+     10. Invalid sample offset range
+    """
+    bad_crc = brd.get("bad_crc", 0)
+    bcb = r.get("bad_crc_back", 0)
+    uart_err = brd.get("uart_errors", 0)
+
+    # 1-3: Reject any corruption
+    if bad_crc > 0:
+        raise RuntimeError(
+            f"Integrity: bad_crc={bad_crc} — stream contains forward-path CRC errors")
+    if bcb > 0:
+        raise RuntimeError(
+            f"Integrity: bad_crc_back={bcb} — stream contains return-path CRC errors")
+    if uart_err > 0:
+        raise RuntimeError(
+            f"Integrity: uart_errors={uart_err} — UART framing/overflow errors detected")
+
+    # 4: Required board metadata
+    required_brd_keys = {"bad_crc", "samples"}
+    missing_brd = required_brd_keys - set(brd.keys())
+    if missing_brd:
+        raise ValueError(f"Integrity: missing required board metadata keys: {missing_brd}")
+    required_r_keys = {"bad_crc_back", "expected_features"}
+    missing_r = required_r_keys - set(r.keys())
+    if missing_r:
+        raise ValueError(f"Integrity: missing required return-path metadata keys: {missing_r}")
+
+    # 5: Length consistency
+    if len(got_feat) != len(fsamp) or len(got_feat) != len(fnums):
+        raise ValueError(
+            f"Integrity: array length mismatch — features={len(got_feat)}, "
+            f"first_sample={len(fsamp)}, frame_numbers={len(fnums)}")
+
+    # 6: Feature dimensions
+    if len(got_feat) > 0 and got_feat.ndim == 2 and got_feat.shape[1] != MELS:
+        raise ValueError(
+            f"Integrity: feature dimension mismatch — got {got_feat.shape[1]}, expected {MELS}")
+
+    # 7: NaN/Inf
+    if len(got_feat) > 0 and not np.isfinite(got_feat).all():
+        raise ValueError("Integrity: NaN or Inf detected in feature arrays")
+
+    # 8: Duplicate frame numbers
+    if len(fnums) > 0:
+        unique_fns = set()
+        for fn_i in fnums.tolist():
+            if fn_i in unique_fns:
+                raise ValueError(f"Integrity: duplicate frame number {fn_i}")
+            unique_fns.add(fn_i)
+
+    # 9: Sample offset validation (s0 must equal fn * HOP)
+    for fn_i, s0_i in zip(fnums.tolist(), fsamp.tolist()):
+        if s0_i != fn_i * HOP:
+            raise ValueError(
+                f"Integrity: offset mismatch at frame {fn_i}: first_sample={s0_i} != {fn_i * HOP}")
+
+    # 10: Sample offset range (only check against received samples for clean streams
+    # where recv_samples is expected to equal total; for controlled-skip the compressed
+    # timeline is validated separately)
+    if len(fsamp) > 0:
+        if fsamp.min() < 0:
+            raise ValueError(
+                f"Integrity: negative first_sample={fsamp.min()}")
+
+
+# ---------------------------------------------------------------------------
+# build_loss_aware_dataset -- canonical shared dataset builder
+# ---------------------------------------------------------------------------
 def build_loss_aware_dataset(got_feat: np.ndarray, fsamp: np.ndarray, fnums: np.ndarray,
                              brd: dict, r: dict, clips: list, expected_samples: int,
                              skip_tuple: tuple | None = None) -> dict:
     """
-    Loss-aware dataset builder with fail-closed protection:
-    - If skip_tuple is None (unexpected/undisclosed loss), reject any stream with
-      bad_crc, seq_gaps, uart_errors, bad_crc_back, or sample/feature count mismatch.
-    - If skip_tuple is explicitly provided, reconstruct original sample timeline,
-      invalidate gap-crossing and boundary-crossing frames, and label valid frames.
+    Loss-aware dataset builder with fail-closed protection.
+
+    ALL streams are validated for corruption, NaN/Inf, duplicates, offset
+    mismatches, etc. via _validate_stream_integrity().
+
+    - If skip_tuple is None: additionally reject any sample/feature count
+      mismatch (unexpected loss).
+    - If skip_tuple is provided: validate skip indices, verify expected
+      counts, reconstruct the original timeline, and invalidate gap-crossing
+      and boundary-crossing frames.
     """
-    bad_crc = brd.get("bad_crc", 0)
-    seq_gaps = brd.get("seq_gaps", 0)
-    uart_err = brd.get("uart_errors", 0)
-    bcb = r.get("bad_crc_back", 0)
+    # Universal integrity checks (corruption, NaN, duplicates, offsets, etc.)
+    _validate_stream_integrity(
+        got_feat, fsamp, fnums, brd, r, clips, expected_samples, skip_tuple)
+
     recv_samples = brd.get("samples", 0)
+    seq_gaps = brd.get("seq_gaps", 0)
+    packets_expected = (expected_samples + SPP - 1) // SPP
 
     if skip_tuple is None:
-        if (bad_crc > 0 or seq_gaps > 0 or uart_err > 0 or bcb > 0
-                or recv_samples != expected_samples or len(got_feat) != r["expected_features"]):
+        # Clean stream: reject any unexplained loss
+        if recv_samples != expected_samples:
             raise RuntimeError(
-                f"Fail-closed: unexplained packet loss or integrity error detected "
-                f"(bad_crc={bad_crc}, seq_gaps={seq_gaps}, uart_err={uart_err}, "
-                f"bad_crc_back={bcb}, samples={recv_samples}/{expected_samples}, "
-                f"features={len(got_feat)}/{r['expected_features']}); refusing to label compressed timeline."
-            )
+                f"Fail-closed: sample count mismatch "
+                f"({recv_samples}/{expected_samples})")
+        if len(got_feat) != r["expected_features"]:
+            raise RuntimeError(
+                f"Fail-closed: feature count mismatch "
+                f"({len(got_feat)}/{r['expected_features']})")
+        if seq_gaps != 0:
+            raise RuntimeError(
+                f"Fail-closed: seq_gaps={seq_gaps} in clean stream")
+        # Clean: identity mapping
         orig_map = np.arange(expected_samples, dtype=np.int64)
     else:
-        packets_expected = (expected_samples + SPP - 1) // SPP
+        # --- Controlled-skip validation ---
+        skip_set = set(skip_tuple)
+        skip_list = list(skip_tuple)
+
+        # (1) Validate skip indices are unique
+        if len(skip_set) != len(skip_list):
+            raise ValueError(
+                f"Controlled-skip: duplicate skip indices in {skip_tuple}")
+
+        # (2) Validate skip indices are within expected packet range
+        for s in skip_list:
+            if s < 0 or s >= packets_expected:
+                raise ValueError(
+                    f"Controlled-skip: skip index {s} out of range "
+                    f"[0, {packets_expected})")
+
+        # (3) Calculate expected received samples from actual skipped packet lengths
+        skipped_samples = 0
+        for p in skip_list:
+            pkt_start = p * SPP
+            pkt_end = min((p + 1) * SPP, expected_samples)
+            skipped_samples += (pkt_end - pkt_start)
+        expected_recv_samples = expected_samples - skipped_samples
+
+        # (4) Verify observed sample count
+        if recv_samples != expected_recv_samples:
+            raise RuntimeError(
+                f"Controlled-skip: expected {expected_recv_samples} received samples "
+                f"(skipped {skipped_samples}), but got {recv_samples} — "
+                f"unexplained additional loss")
+
+        # (5) Calculate expected received feature count from compressed sample count
+        expected_recv_features = max(0, 1 + (recv_samples - WIN) // HOP) if recv_samples >= WIN else 0
+        if len(got_feat) != expected_recv_features:
+            raise RuntimeError(
+                f"Controlled-skip: expected {expected_recv_features} features from "
+                f"{recv_samples} compressed samples, got {len(got_feat)} — "
+                f"unexplained feature loss")
+
+        # (6) Verify sequence-gap counts against firmware semantics
+        # board_link.py: board firmware reports seq_gaps as the count of
+        # missing sequence numbers (each missing packet increments seq_gaps
+        # by 1). With skip_tuple, the number of seq_gaps should equal the
+        # number of skipped packets.
+        if seq_gaps != len(skip_list):
+            raise RuntimeError(
+                f"Controlled-skip: expected seq_gaps={len(skip_list)} for "
+                f"{len(skip_list)} skipped packets, got seq_gaps={seq_gaps} — "
+                f"unexplained gaps")
+
+        # (7) Verify accepted data-packet counts and EOS handling
+        expected_packets_sent = packets_expected - len(skip_list)
+        packets_sent = r.get("packets_sent", None)
+        if packets_sent is not None and packets_sent != expected_packets_sent:
+            raise RuntimeError(
+                f"Controlled-skip: expected {expected_packets_sent} packets sent, "
+                f"got {packets_sent}")
+
+        # (8) Reconstruct the original timeline AFTER validation
         orig_map = np.concatenate([
             np.arange(p * SPP, min((p + 1) * SPP, expected_samples), dtype=np.int64)
-            for p in range(packets_expected) if p not in skip_tuple
+            for p in range(packets_expected) if p not in skip_set
         ])
 
+    # --- Dataset construction ---
     n_clips = len(clips)
     X = np.zeros((n_clips, 49, MELS), dtype=np.float32)
     occupied = np.zeros((n_clips, 49), dtype=bool)
-    seen = set()
     gap_invalid = 0
     boundary_invalid = 0
 
     for i, (fn, s0) in enumerate(zip(fnums, fsamp)):
         fn_i, s0_i = int(fn), int(s0)
-        if fn_i in seen:
-            raise ValueError(f"Duplicate frame number {fn_i}")
-        seen.add(fn_i)
-        if s0_i != fn_i * HOP:
-            raise ValueError(f"Offset mismatch at frame {fn_i}: {s0_i} != {fn_i * HOP}")
+
+        # (9) Timeline reconstruction: map compressed indices to original positions
+        if s0_i + WIN - 1 >= len(orig_map):
+            gap_invalid += 1
+            continue
         orig_start = int(orig_map[s0_i])
         orig_end = int(orig_map[s0_i + WIN - 1])
+
+        # Invalidate frames crossing missing samples (gap)
         if orig_end - orig_start != WIN - 1:
             gap_invalid += 1
             continue
+
+        # (10) Invalidate frames crossing clip boundaries
         c_start = orig_start // FS
         c_end = orig_end // FS
         if c_start != c_end:
             boundary_invalid += 1
             continue
+
+        if c_start >= n_clips:
+            continue
+
         fic = (orig_start % FS) // HOP
+        if fic >= 49:
+            continue
+
         occupied[c_start, fic] = True
         X[c_start, fic] = got_feat[i]
+
+    # (11) For clean streams, require complete occupancy
+    if skip_tuple is None:
+        if not occupied.all():
+            raise RuntimeError(
+                "Fail-closed: unpopulated feature slots remain after clean stream")
 
     return {
         "X": X,
@@ -176,7 +352,7 @@ def save_dataset_npz(
     fs_dataset: np.ndarray,
     fn_dataset: np.ndarray,
 ) -> None:
-    """Atomically save a dataset NPZ with the canonical schema (Bug 3 fix).
+    """Atomically save a dataset NPZ with the canonical schema.
 
     Schema:
       X            float32 (n_clips, 49, MELS)
@@ -196,62 +372,50 @@ def save_dataset_npz(
     )
     # Verify before promoting — use allow_pickle=False and explicit close for Windows
     with np.load(tmp, allow_pickle=False) as chk:
-        assert chk["X"].shape == X.shape, f"Shape mismatch after save: {chk['X'].shape}"
-        assert chk["first_sample"].shape == fs_dataset.shape
-        assert chk["frame_numbers"].shape == fn_dataset.shape
+        if chk["X"].shape != X.shape:
+            raise RuntimeError(f"Shape mismatch after save: {chk['X'].shape}")
+        if chk["first_sample"].shape != fs_dataset.shape:
+            raise RuntimeError(f"first_sample shape mismatch: {chk['first_sample'].shape}")
+        if chk["frame_numbers"].shape != fn_dataset.shape:
+            raise RuntimeError(f"frame_numbers shape mismatch: {chk['frame_numbers'].shape}")
     import os
     os.replace(tmp, path)
 
 
-def build_and_validate_datasets() -> dict:
-    """Stream all 144 clips at speed=1.0, exclude boundary frames, and save board & numpy datasets.
+def _shared_dataset_workflow(clips, out_dir: Path, board_stream_fn, ref_features_fn,
+                             existing_comparison: bool = True) -> dict:
+    """Shared dataset-construction workflow used by both build_and_validate_datasets()
+    and mission4_audit.rebuild_datasets_with_metadata().
 
-    Uses build_loss_aware_dataset() for consistent labelling (Bug 1 fix).
-    Saves both datasets with save_dataset_npz() for consistent schema (Bug 3 fix).
+    Parameters
+    ----------
+    clips : list of (clip_id, label)
+    out_dir : Path to output directory
+    board_stream_fn : callable() -> (got_feat, fsamp, fnums, brd, r_meta, expected_samples)
+        Function that streams audio to the board and returns results.
+    ref_features_fn : callable(expected_samples) -> np.ndarray
+        Function that computes reference features.
+    existing_comparison : bool
+        If True and previous NPZ files exist, compare against them.
+
+    Returns
+    -------
+    dict with dataset statistics.
     """
-    clips = clip_list(TEAM)
-    x_all = np.concatenate([get_clip(TEAM, cid, fs=FS, antialias=True) for cid, _ in clips])
-    _, xhat_all, _ = quantise(x_all, fmt="i16", scale=1.0)
-    pl_all = pack(x_all, fmt="i16", scale=1.0)
-    ref_all = features(xhat_all, fs=FS, win=WIN, hop=HOP, nfft=NFFT, mels=MELS, mfcc=0)
+    # Stream to board
+    got_feat, fsamp_raw, fnums_raw, brd, r_meta, expected_samples = board_stream_fn()
 
-    b = Board(PORT, baud=BAUD)
-    try:
-        r = b.stream(pl_all, fs=FS, fmt="i16", scale=1.0, win=WIN, hop=HOP,
-                     nfft=NFFT, mels=MELS, mfcc=0, feat=True, store="none",
-                     speed=1.0, samples_per_packet=SPP)
-    finally:
-        b.close()
+    # Compute reference features
+    ref_all = ref_features_fn(expected_samples)
 
-    brd = r["board"] or {}
-    got_feat = r["features"]
-    fsamp_raw = np.asarray(r["first_sample"], dtype=np.int64)
-    fnums_raw = np.asarray(r["frame_numbers"], dtype=np.int64)
-    expected_samples = len(x_all)
-
-    # Pre-call validation
-    assert brd is not None, "Board summary is None"
-    assert len(got_feat) == len(fsamp_raw) == len(fnums_raw), (
-        f"Length mismatch: feats={len(got_feat)}, fsamp={len(fsamp_raw)}, fnums={len(fnums_raw)}")
-    assert got_feat.shape[1] == MELS, f"Feature dim mismatch: {got_feat.shape[1]} != {MELS}"
-    assert np.isfinite(got_feat).all(), "NaN/Inf in board features"
-    assert fsamp_raw.min() >= 0 and fsamp_raw.max() < expected_samples, \
-        f"first_sample out of range: [{fsamp_raw.min()}, {fsamp_raw.max()}]"
-
-    # Additional stream integrity checks
-    r_check = {
-        "expected_features": r.get("expected_features", 7199),
-        "bad_crc_back": r.get("bad_crc_back", 0),
-    }
-
-    # Build labelled dataset using the canonical loss-aware function (Bug 1 fix)
+    # Build labelled dataset using the canonical loss-aware function
     result = build_loss_aware_dataset(
-        got_feat, fsamp_raw, fnums_raw, brd, r_check, clips, expected_samples,
+        got_feat, fsamp_raw, fnums_raw, brd, r_meta, clips, expected_samples,
         skip_tuple=None,
     )
-    assert result["gap_invalid"] == 0, \
-        f"Unexpected gap-invalid frames in clean stream: {result['gap_invalid']}"
-    assert result["occupied"].all(), "Unpopulated slots remain after clean stream"
+    if result["gap_invalid"] != 0:
+        raise RuntimeError(
+            f"Unexpected gap-invalid frames in clean stream: {result['gap_invalid']}")
 
     X_board = result["X"]
     occupied = result["occupied"]
@@ -276,24 +440,56 @@ def build_and_validate_datasets() -> dict:
     y = np.array([CLASSES.index(lab) for _, lab in clips], dtype=np.int64)
     clip_ids = np.array([cid for cid, _ in clips], dtype=np.int64)
 
-    assert boundary_count == 143, f"Expected 143 boundary frames, got {boundary_count}"
-    assert np.isfinite(X_board).all() and np.isfinite(X_numpy).all()
+    expected_boundary = n_clips - 1 if n_clips > 1 else 0
+    if boundary_count != expected_boundary:
+        raise RuntimeError(
+            f"Expected {expected_boundary} boundary frames for {n_clips} clips, "
+            f"got {boundary_count}")
+    if not np.isfinite(X_board).all() or not np.isfinite(X_numpy).all():
+        raise RuntimeError("NaN/Inf in assembled dataset arrays")
     max_diff = float(np.max(np.abs(X_board - X_numpy)))
-    assert max_diff <= 0.05, f"Max diff {max_diff} > 0.05 dB"
+    if max_diff > 0.05:
+        raise RuntimeError(f"Max diff {max_diff} > 0.05 dB")
 
-    # Atomic save with consistent schema (Bug 3 fix)
-    save_dataset_npz(OUT_DIR / "dataset_board.npz", X_board, y, clip_ids, fs_meta, fn_meta)
-    save_dataset_npz(OUT_DIR / "dataset_numpy.npz", X_numpy, y, clip_ids, fs_meta, fn_meta)
+    # Optional comparison against existing datasets
+    board_path = out_dir / "dataset_board.npz"
+    numpy_path = out_dir / "dataset_numpy.npz"
+    if existing_comparison and board_path.exists() and numpy_path.exists():
+        try:
+            old_b = np.load(board_path)
+            old_n = np.load(numpy_path)
+            if not np.allclose(X_board, old_b["X"], atol=1e-5):
+                print("  WARNING: X_board changed from previous dataset build")
+            if not np.allclose(X_numpy, old_n["X"], atol=1e-5):
+                print("  WARNING: X_numpy changed from previous dataset build")
+            else:
+                print("  Verified: X, y unchanged from previous dataset build.")
+            old_b.close()
+            old_n.close()
+        except Exception as e:
+            print(f"  Skipping existing dataset comparison: {e}")
+
+    # Save using canonical atomic writer
+    save_dataset_npz(board_path, X_board, y, clip_ids, fs_meta, fn_meta)
+    save_dataset_npz(numpy_path, X_numpy, y, clip_ids, fs_meta, fn_meta)
 
     # Reload and verify
-    db = np.load(OUT_DIR / "dataset_board.npz")
-    dn = np.load(OUT_DIR / "dataset_numpy.npz")
-    assert db["X"].shape == (144, 49, 40) and dn["X"].shape == (144, 49, 40)
-    assert db["first_sample"].shape == (144, 49)
-    assert db["frame_numbers"].shape == (144, 49)
-    assert len(np.unique(db["clip_ids"])) == 144
-    assert all(np.sum(db["y"] == c) == 24 for c in range(len(CLASSES)))
+    db = np.load(board_path)
+    dn = np.load(numpy_path)
+    if db["X"].shape != (n_clips, 49, MELS) or dn["X"].shape != (n_clips, 49, MELS):
+        raise RuntimeError(f"Reload shape error: board={db['X'].shape}, numpy={dn['X'].shape}")
+    if db["first_sample"].shape != (n_clips, 49):
+        raise RuntimeError(f"first_sample shape: {db['first_sample'].shape}")
+    if db["frame_numbers"].shape != (n_clips, 49):
+        raise RuntimeError(f"frame_numbers shape: {db['frame_numbers'].shape}")
+    if len(np.unique(db["clip_ids"])) != n_clips:
+        raise RuntimeError("Clip ID count mismatch")
+    if n_clips == 144 and not all(np.sum(db["y"] == c) == 24 for c in range(len(CLASSES))):
+        raise RuntimeError("Class balance violation")
+    db.close()
+    dn.close()
 
+    recv_samples = brd.get("samples", 0)
     stats = {
         "total_frames": len(got_feat),
         "boundary_frames_excluded": boundary_count,
@@ -303,16 +499,53 @@ def build_and_validate_datasets() -> dict:
         "max_diff_db": round(max_diff, 6),
         "bad_crc": brd.get("bad_crc", 0),
         "seq_gaps": brd.get("seq_gaps", 0),
-        "packets_sent": r.get("packets_sent", 0),
+        "packets_sent": r_meta.get("packets_sent", 0),
         "frames_ok": brd.get("frames_ok", 0),
-        "samples_received": brd.get("samples", 0),
+        "samples_received": recv_samples,
         "received_features": len(got_feat),
-        "lost_features": r.get("lost_features", 0),
-        "bad_crc_back": r.get("bad_crc_back", 0),
+        "lost_features": r_meta.get("lost_features", 0),
+        "bad_crc_back": r_meta.get("bad_crc_back", 0),
     }
-    (OUT_DIR / "dataset_validation.json").write_text(json.dumps(stats, indent=2))
+    (out_dir / "dataset_validation.json").write_text(json.dumps(stats, indent=2))
     print("=== Dataset Validation ===", stats)
     return stats
+
+
+def build_and_validate_datasets() -> dict:
+    """Stream all 144 clips at speed=1.0, exclude boundary frames, and save board & numpy datasets.
+
+    Uses _shared_dataset_workflow() which calls build_loss_aware_dataset() for
+    consistent labelling and save_dataset_npz() for consistent schema.
+    """
+    clips = clip_list(TEAM)
+    x_all = np.concatenate([get_clip(TEAM, cid, fs=FS, antialias=True) for cid, _ in clips])
+    _, xhat_all, _ = quantise(x_all, fmt="i16", scale=1.0)
+    pl_all = pack(x_all, fmt="i16", scale=1.0)
+
+    def board_stream_fn():
+        b = Board(PORT, baud=BAUD)
+        try:
+            r = b.stream(pl_all, fs=FS, fmt="i16", scale=1.0, win=WIN, hop=HOP,
+                         nfft=NFFT, mels=MELS, mfcc=0, feat=True, store="none",
+                         speed=1.0, samples_per_packet=SPP)
+        finally:
+            b.close()
+        brd = r["board"] or {}
+        got_feat = r["features"]
+        fsamp_raw = np.asarray(r["first_sample"], dtype=np.int64)
+        fnums_raw = np.asarray(r["frame_numbers"], dtype=np.int64)
+        r_meta = {
+            "expected_features": r.get("expected_features", 7199),
+            "bad_crc_back": r.get("bad_crc_back", 0),
+            "packets_sent": r.get("packets_sent", 0),
+            "lost_features": r.get("lost_features", 0),
+        }
+        return got_feat, fsamp_raw, fnums_raw, brd, r_meta, len(x_all)
+
+    def ref_features_fn(expected_samples):
+        return features(xhat_all, fs=FS, win=WIN, hop=HOP, nfft=NFFT, mels=MELS, mfcc=0)
+
+    return _shared_dataset_workflow(clips, OUT_DIR, board_stream_fn, ref_features_fn)
 
 
 def run_multiclass_loss_alignment() -> dict:

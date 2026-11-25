@@ -20,10 +20,28 @@
 
 ## 3. Fastest Zero-Loss Streaming Speed (`fastest_speed.csv`)
 
-Swept `speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"` (requiring `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`, `samples_received==samples_expected`, and `packets_sent==packets_expected`):
-- **COM5 (921600 baud, UART):** Fastest zero-loss requested speed = **32.0×**
-- **COM10 (native USB, 115200 baud):** Fastest zero-loss requested speed = **6.0×**
-- `bad_crc_back` (return-path CRC failures) = 0 at all zero-loss speeds.
+Swept `requested_speed` from 0.5× to 32× on both USB interfaces with `feat=False, store="none"`.
+Zero-loss requires `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back==0`,
+`samples_received==samples_expected`, and `packets_sent==packets_expected`.
+
+| Interface | Requested speed | Effective speed | Wire throughput |
+|---|---:|---:|---:|
+| COM5, UART | 32.0× | 2.737× | 89360.5 B/s |
+| COM10, native USB | 6.0× | 5.713× | 186536.0 B/s |
+
+**Interpretation:**
+- These Mission 4 measurements were taken with `feat=False` (no feature computation on board).
+- **Requested speed is not the same as effective delivered speed.** The requested speed sets the
+  pacing timer; effective speed is `audio_duration / elapsed_wall_time`.
+- **COM5** is constrained by its UART physical bandwidth: at 921,600 baud with 10 bits/byte,
+  the theoretical ceiling is 92,160 B/s. Serial backpressure prevents the requested 32× rate
+  from being achieved — the effective speed plateaus at ~2.74×.
+- **COM10** (native USB) achieves higher throughput but encounters receive-buffer overflow at
+  requested speeds of 8× and above, causing CRC errors and sequence gaps.
+- Mission 3 and Mission 4 measurements may differ because of experimental settings (feat on/off)
+  and timing definitions (Mission 3 uses `send_seconds`; Mission 4 uses wall-clock `elapsed_s`).
+
+`bad_crc_back` (return-path CRC failures) = 0 at all zero-loss speeds.
 
 ## 4. Full 144-Clip Loss Accounting (Verified)
 
@@ -31,12 +49,12 @@ Swept `speed` from 0.5× to 32× on both USB interfaces with `feat=False, store=
 |---|---:|---:|
 | Clips | 144 | 144 |
 | Packets expected | 7,200 | 7,200 |
-| Packets sent | 7200 | 7197 |
-| `board["frames_ok"]` | 7201 *(incl. EOS)* | 7198 *(incl. EOS)* |
+| Packets sent | N/A | 7197 |
+| `board["frames_ok"]` | N/A *(incl. EOS)* | 7198 *(incl. EOS)* |
 | Samples expected | 2,304,000 | 2,304,000 |
-| Samples received | 2,304,000 | 2,303,040 |
+| Samples received | N/A | 2,303,040 |
 | Expected feature frames | 7,199 | 7,199 |
-| Received feature frames | 7199 | 7196 |
+| Received feature frames | N/A | 7196 |
 | Lost feature frames | 0 | 3 |
 | `bad_crc` | 0 | 0 |
 | `bad_crc_back` | 0 | 0 |
@@ -45,12 +63,31 @@ Swept `speed` from 0.5× to 32× on both USB interfaces with `feat=False, store=
 | Boundary-crossing frames excluded | 143 | — |
 | Clean within-clip frames in dataset | 7,056 (144 × 49) | — |
 
-## 5. Dataset Metadata Update (`dataset_board.npz`, `dataset_numpy.npz`)
+## 5. Fail-Closed Loss Handling
+
+Both `build_and_validate_datasets()` (in `mission4_loss_dataset.py`) and
+`rebuild_datasets_with_metadata()` (in `mission4_audit.py`) delegate to the same
+shared `_shared_dataset_workflow()` which calls:
+- `build_loss_aware_dataset()` for loss-aware validation and labelling.
+- `save_dataset_npz()` for atomic dataset writing with the canonical schema.
+
+For **clean streams** (skip_tuple=None), ALL of the following are rejected:
+nonzero bad_crc, bad_crc_back, uart_errors, seq_gaps; sample/feature count mismatches;
+duplicate frame numbers; NaN/Inf values; offset mismatches.
+
+For **controlled-loss streams** (explicit skip_tuple): the same corruption checks apply,
+plus validation of skip indices (unique, in range), expected sample/feature counts
+computed from the actual skipped packet lengths, and sequence-gap count verification.
+Timeline reconstruction and frame invalidation occur only after validation passes.
+
+Regression tests: `python -m pytest test_mission4_loss_handling.py -q`
+
+## 6. Dataset Metadata Update (`dataset_board.npz`, `dataset_numpy.npz`)
 Both NPZ files now contain additional arrays:
 - `first_sample`: shape `(144, 49)` — original `first_sample` offset for each stored feature frame.
 - `frame_numbers`: shape `(144, 49)` — global frame index for each stored feature frame.
 - `X`, `y`, `classes`, `clip_ids` are **bit-identical** to the previous dataset build.
 
-## 6. LLM Usage Update
+## 7. LLM Usage Update
 - Used LLM to implement `mission4_audit.py` for the speed sweep, `bad_crc_back` enrichment,
   full-stream `skip=(10,11,200)` experiment, dataset metadata addition, and 144-clip loss accounting verification.
