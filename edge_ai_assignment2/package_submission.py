@@ -139,11 +139,11 @@ Hardware: ESP32-S3-DevKitC-1 N16R8 (240 MHz, 16 MB Flash, 8 MB PSRAM)
     m1_theo = _format_table(
         ["Format", "Fs (Hz)", "Bytes/Sample", "Payload B/s", "Wire B/s (spp=320)"],
         [
-            ["float32", "16000", "4", "64,000", "65,300"],
+            ["float32", "16000", "4", "64,000", "64,650"],
             ["int16", "16000", "2", "32,000", "32,650"],
-            ["int8", "16000", "1", "16,000", "16,325"],
+            ["int8", "16000", "1", "16,000", "16,650"],
             ["int16", "8000", "2", "16,000", "16,325"],
-            ["int8", "8000", "1", "8,000", "8,163"],
+            ["int8", "8000", "1", "8,000", "8,325"],
         ],
     )
     m1_baud = _format_table(
@@ -165,13 +165,13 @@ Hardware: ESP32-S3-DevKitC-1 N16R8 (240 MHz, 16 MB Flash, 8 MB PSRAM)
         ],
     )
     m1_rt = _format_table(
-        ["Config", "Req B/s", "COM5 115200", "COM5 921600", "COM10 USB"],
+        ["Config", "Req B/s (wire)", "COM5 115200", "COM5 921600", "COM10 USB"],
         [
-            ["16k f32", "65,300", "FAIL", "PASS (1.35x)", "PASS"],
-            ["16k i16", "32,650", "FAIL", "PASS (2.76x)", "PASS"],
-            ["16k i8", "16,325", "FAIL", "PASS (5.51x)", "PASS"],
-            ["8k i16", "16,325", "FAIL", "PASS (5.51x)", "PASS"],
-            ["8k i8", "8,163", "PASS (1.41x)", "PASS (11.0x)", "PASS"],
+            ["16k f32", "64,650", "FAIL", "PASS (1.41x)", "PASS"],
+            ["16k i16", "32,650", "FAIL", "PASS (2.80x)", "PASS"],
+            ["16k i8", "16,650", "FAIL", "PASS (5.49x)", "PASS"],
+            ["8k i16", "16,325", "FAIL", "PASS (5.60x)", "PASS"],
+            ["8k i8", "8,325", "PASS (1.39x)", "PASS (11.0x)", "PASS"],
         ],
     )
 
