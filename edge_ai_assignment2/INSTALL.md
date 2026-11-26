@@ -29,7 +29,7 @@ Run the offline regression tests (no hardware required):
 python -m pytest test_mission4_loss_handling.py -v
 ```
 
-All 21 tests should pass.
+All 32 tests should pass.
 
 ---
 
@@ -79,6 +79,14 @@ Run the integrated demonstration (requires board on COM5):
 
 ```powershell
 python demo_live.py --phase stream_save
+```
+
+> **Power-cycle required between demo phases:**
+> After `stream_save` completes (the `SAVE` command finishes writing to LittleFS), physically
+> disconnect and reconnect the USB cable to cut power to the board. Wait at least 3 seconds
+> before proceeding. This clears PSRAM and proves that flash storage persists across power loss.
+
+```powershell
 python demo_live.py --phase verify
 ```
 

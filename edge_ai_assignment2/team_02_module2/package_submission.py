@@ -147,21 +147,21 @@ Hardware: ESP32-S3-DevKitC-1 N16R8 (240 MHz, 16 MB Flash, 8 MB PSRAM)
         ],
     )
     m1_baud = _format_table(
-        ["Port", "Baud", "Payload B/s", "Wire B/s", "Max Real-Time (i16)"],
+        ["Port", "Baud", "Payload B/s (measured)", "Wire B/s (measured)", "Max Real-Time (i16)"],
         [
-            ["COM5 (UART)", "115,200", "11,288", "11,518", "0.35x"],
-            ["COM5 (UART)", "921,600", "88,180", "89,970", "2.76x"],
-            ["COM5 (UART)", "2,000,000", "184,320", "188,064", "5.76x"],
-            ["COM10 (USB)", "115,200", "123,736", "126,249", "3.87x"],
+            ["COM5 (UART)", "115,200", "11,358", "11,588", "0.35x"],
+            ["COM5 (UART)", "921,600", "89,611", "91,432", "2.80x"],
+            ["COM5 (UART)", "2,000,000", "184,745", "188,498", "5.77x"],
+            ["COM10 (USB)", "115,200*", "379,419*", "387,126*", "11.86x* (errors)"],
         ],
     )
     m1_pkt = _format_table(
-        ["spp", "Payload B", "Overhead %", "Latency (ms)", "COM5 921600 B/s"],
+        ["spp", "Payload B", "Overhead %", "Latency (ms)", "COM5 921600 Payload B/s (measured)"],
         [
-            ["8", "16", "44.8%", "0.5", "48,910"],
-            ["64", "128", "9.2%", "4.0", "81,200"],
-            ["320", "640", "2.0%", "20.0", "88,180"],
-            ["1024", "2048", "0.6%", "64.0", "89,400"],
+            ["8", "16", "44.8%", "0.5", "51,014"],
+            ["64", "128", "9.2%", "4.0", "83,249"],
+            ["320", "640", "2.0%", "20.0", "89,850"],
+            ["1024", "2048", "0.6%", "64.0", "91,817"],
         ],
     )
     m1_rt = _format_table(
@@ -184,8 +184,8 @@ Hardware: ESP32-S3-DevKitC-1 N16R8 (240 MHz, 16 MB Flash, 8 MB PSRAM)
     m2_mem = _format_table(
         ["Store", "Total Bytes", "Max 16k i16 Duration", "Persists Power-Cycle?"],
         [
-            ["SRAM", "~300 KB free", "~9.3 s", "No (volatile)"],
-            ["PSRAM (OPI)", "8,388,608 B", "~262 s (144 clips = 4.608 MB)", "No (volatile)"],
+            ["SRAM", "~300 KB free", "7.168 s (measured)", "No (volatile)"],
+            ["PSRAM (OPI)", "8,388,608 B", "256 s measured (144 clips = 4.608 MB fit)", "No (volatile)"],
             ["LittleFS Flash", "10,354,688 B (9.875 MiB)", "4,608,000 B saved (CRC 0x4c3c7945)", "Yes (verified)"],
         ],
     )
@@ -265,6 +265,8 @@ Real-Time Feasibility:
 {m1_rt}
 
 6. Analysis: UART is bounded by 92,160 B/s; COM10 native USB is faster but overflows RX buffers at speed=0 without pacing.
+   * COM10 115,200 baud row marked with asterisk: all_integrity_ok=False (100 bad_crc, 145 seq_gaps); throughput figures are unreliable and shown for reference only.
+   Wire B/s = payload B/s + (1 packet per 20 ms) × 13 B framing = payload + 650 B/s for spp=320 i16 at 16 kHz.
 7. What we learnt: COM5 at 921,600 baud with spp=320 balances 2.0% overhead and 20 ms latency reliably.
 8. LLM log: Historical pre-experiment LLM prediction was not recorded. Used LLM to write mission1_pipe.py and plot throughput/overhead; all runs executed on hardware.
 """),
@@ -371,13 +373,13 @@ Classifier Accuracy Comparison:
     reflections = """
 INDIVIDUAL TEAM MEMBER ROLE REFLECTIONS (Team 02 — Edge Experts)
 
-- Member 1 (Builder): [TODO: confirm with team] Built/flashed custom partitions.csv, cmdSave() in
+- Member 1 (Builder): [PENDING TEAM CONFIRMATION — do not submit until confirmed] Built/flashed custom partitions.csv, cmdSave() in
   doorbell_board_starter.ino, and Radix-2 FFT in features.h.
-- Member 2 (Measurer): [TODO: confirm with team] Executed COM5/COM10 throughput, SQNR,
+- Member 2 (Measurer): [PENDING TEAM CONFIRMATION — do not submit until confirmed] Executed COM5/COM10 throughput, SQNR,
   6-class accuracy, and 144-clip hardware streams.
-- Member 3 (Skeptic): [TODO: confirm with team] Audited timeline compression, boundary-frame
+- Member 3 (Skeptic): [PENDING TEAM CONFIRMATION — do not submit until confirmed] Audited timeline compression, boundary-frame
   exclusion, and real-world acoustic domain shift limitations.
-- Member 4 (Scribe): [TODO: confirm with team] Compiled mission records, data card, client
+- Member 4 (Scribe): [PENDING TEAM CONFIRMATION — do not submit until confirmed] Compiled mission records, data card, client
   commitment memo, and reproducibility documentation.
 
 REPRODUCIBILITY & LIVE DEMONSTRATION INSTRUCTIONS

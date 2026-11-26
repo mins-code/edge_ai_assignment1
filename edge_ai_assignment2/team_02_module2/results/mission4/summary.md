@@ -49,12 +49,12 @@ Zero-loss requires `bad_crc==0`, `seq_gaps==0`, `uart_errors==0`, `bad_crc_back=
 |---|---:|---:|
 | Clips | 144 | 144 |
 | Packets expected | 7,200 | 7,200 |
-| Packets sent | N/A | 7197 |
-| `board["frames_ok"]` | N/A *(incl. EOS)* | 7198 *(incl. EOS)* |
+| Packets sent | 7,200 | 7197 |
+| `board["frames_ok"]` | 7,201 *(incl. EOS)* | 7198 *(incl. EOS)* |
 | Samples expected | 2,304,000 | 2,304,000 |
-| Samples received | N/A | 2,303,040 |
+| Samples received | 2,304,000 | 2,303,040 |
 | Expected feature frames | 7,199 | 7,199 |
-| Received feature frames | N/A | 7196 |
+| Received feature frames | 7,199 | 7196 |
 | Lost feature frames | 0 | 3 |
 | `bad_crc` | 0 | 0 |
 | `bad_crc_back` | 0 | 0 |
